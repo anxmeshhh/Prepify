@@ -2,3 +2,5 @@ flask
 google-auth
 requests
 python-dotenv
+beautifulsoup4
+lxml

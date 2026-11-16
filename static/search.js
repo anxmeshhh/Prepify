@@ -30,6 +30,10 @@ async function getJson(url, opts = {}) {
 // ---------- sources ----------
 // linkOnly: Prepify never reads that site automatically (LinkedIn bans automated access); it only links.
 const SITES = {
+  Official: {
+    mark: 'Of', color: 'var(--accent)', host: 'Careers page', server: true,
+    url: (n) => OFFICIAL_LINKS[n.toLowerCase()] || null
+  },
   Glassdoor: {
     mark: 'G', color: 'var(--good)', host: 'glassdoor.co.in',
     url: (n) => `https://www.glassdoor.co.in/Search/results.htm?keyword=${encodeURIComponent(n)}`
@@ -50,12 +54,25 @@ const SITES = {
     mark: 'R', color: 'var(--error)', host: 'reddit.com',
     url: (n) => `https://www.reddit.com/search/?q=${encodeURIComponent(n + ' interview')}`
   },
+  Code360: {
+    mark: 'C3', color: '#f0883e', host: 'naukri.com/code360',
+    url: (n) => `https://www.naukri.com/code360/interview-experiences/${n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`
+  },
+  PrepInsta: {
+    mark: 'P', color: '#6c8cff', host: 'prepinsta.com',
+    url: (n) => `https://prepinsta.com/?s=${encodeURIComponent(n + ' interview')}`
+  },
+  LeetCode: {
+    mark: 'LC', color: '#ffa116', host: 'leetcode.com/discuss',
+    url: (n) => `https://leetcode.com/discuss/interview-experience?currentPage=1&orderBy=most_relevant&query=${encodeURIComponent(n)}`
+  },
   LinkedIn: {
     mark: 'in', color: '#4a90d9', host: 'linkedin.com', linkOnly: true,
     url: (n) => `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(n + ' interview experience')}`
   }
 };
 const PULLABLE = Object.keys(SITES).filter(k => !SITES[k].linkOnly);
+const OFFICIAL_LINKS = {};          // company (lower case) -> careers link the user added this session
 const GOOGLE = {
   mark: 'g', color: 'var(--purple)', host: 'google.com',
   url: (n) => `https://www.google.com/search?q=${encodeURIComponent(n + ' interview questions experience')}`
@@ -85,6 +102,99 @@ function cleanQuestions(list) {
     parts.forEach((text, i) => out.push({ ...q, text, answers: i === 0 ? [...(q.answers || [])] : [] }));
   });
   return out;
+}
+
+// ---------- presenting messy site text cleanly ----------
+// Lines that are only site chrome, never content.
+const CHROME_LINE = /^(read more|show more|see more|show less|view more|helpful|not helpful|report|share|reply|upvote|downvote|answer question|add an answer|write an answer|view all answers?|\d+\s+answers?|helpful\s*\(\d+\)|\d+\s+(people\s+)?found (this|it) helpful|was this helpful\??|\.\.\.)$/i;
+
+function tidyText(t) {
+  return String(t || '')
+    .replace(/\r/g, '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/[ \t\u00A0]+/g, ' ')
+    .split('\n').map(l => l.trim()).filter(l => l && !CHROME_LINE.test(l)).join('\n')
+    .replace(/(\s*(answer question|read more|show more|helpful|report))+\s*$/i, '')
+    .trim();
+}
+
+// Turns raw text into paragraphs and lists: real line breaks, "1. a 2. b" runs, "- a - b" bullets,
+// "Round 1: ... Round 2: ..." steps, and over-long paragraphs split by sentence.
+function textBlocks(raw) {
+  const text = tidyText(raw);
+  if (!text) return [];
+  const blocks = [];
+  const pushPara = (p) => {
+    p = p.trim();
+    if (!p) return;
+    if (p.length > 600) {
+      const sentences = p.match(/[^.!?]+[.!?]+(\s|$)|[^.!?]+$/g) || [p];
+      let chunk = '';
+      sentences.forEach(x => { if ((chunk + x).length > 380 && chunk) { blocks.push({ type: 'p', text: chunk.trim() }); chunk = ''; } chunk += x; });
+      if (chunk.trim()) blocks.push({ type: 'p', text: chunk.trim() });
+    } else blocks.push({ type: 'p', text: p });
+  };
+  const inlineList = (line) => {
+    // "intro 1. a 2. b 3. c"  or  "Round 1: a Round 2: b"
+    const num = line.split(/\s(?=(?:\d{1,2}[.)]|Round\s*\d+\s*[:.\-])\s)/i);
+    if (num.length >= 3) {
+      const first = /^(\d{1,2}[.)]|Round\s*\d+)/i.test(num[0]) ? null : num.shift();
+      if (first) pushPara(first);
+      blocks.push({ type: 'ol', items: num.map(x => x.replace(/^\d{1,2}[.)]\s*/, '').trim()).filter(Boolean) });
+      return true;
+    }
+    const bul = line.split(/\s[•▪●]\s|\s-\s(?=[A-Z])/);
+    if (bul.length >= 3) {
+      pushPara(bul.shift());
+      blocks.push({ type: 'ul', items: bul.map(x => x.trim()).filter(Boolean) });
+      return true;
+    }
+    return false;
+  };
+  let list = null;
+  text.split('\n').forEach(line => {
+    const m = line.match(/^(?:[-*•▪●]|\d{1,2}[.)])\s+(.*)$/);
+    if (m) {
+      const type = /^\d/.test(line) ? 'ol' : 'ul';
+      if (!list || list.type !== type) { list = { type, items: [] }; blocks.push(list); }
+      list.items.push(m[1]);
+      return;
+    }
+    list = null;
+    if (!inlineList(line)) pushPara(line);
+  });
+  const seen = new Set();             // the same paragraph repeated by the site
+  return blocks.filter(b => { const k = b.type + (b.text || b.items.join('|')); if (seen.has(k)) return false; seen.add(k); return true; });
+}
+
+function richText(raw) {
+  return `<div class="rich">${textBlocks(raw).map(b => b.type === 'p'
+    ? `<p>${esc(b.text)}</p>`
+    : `<${b.type}>${b.items.map(i => `<li>${esc(i)}</li>`).join('')}</${b.type}>`).join('')}</div>`;
+}
+
+// Practice links for coding questions: a direct LeetCode problem for classics, otherwise searches.
+const CLASSICS = [
+  [/reverse (a |the )?linked list/i, 'reverse-linked-list'], [/two sum/i, 'two-sum'],
+  [/valid parenthes|balanced (brackets|parenthes)/i, 'valid-parentheses'], [/merge two sorted (lists|linked)/i, 'merge-two-sorted-lists'],
+  [/longest substring without repeat/i, 'longest-substring-without-repeating-characters'], [/maximum subarray|kadane/i, 'maximum-subarray'],
+  [/detect (a )?cycle in (a )?linked list|linked list cycle/i, 'linked-list-cycle'], [/climbing stairs/i, 'climbing-stairs'],
+  [/lowest common ancestor/i, 'lowest-common-ancestor-of-a-binary-tree'], [/level order traversal/i, 'binary-tree-level-order-traversal'],
+  [/palindrom(e|ic) (string|number)|check (if|whether) .* palindrome/i, 'valid-palindrome'], [/anagram/i, 'valid-anagram'],
+  [/second (highest|largest) salary/i, 'second-highest-salary'], [/nth highest salary/i, 'nth-highest-salary'],
+  [/binary search\b/i, 'binary-search'], [/rotate (an )?array/i, 'rotate-array'], [/missing number/i, 'missing-number'],
+  [/fibonacci/i, 'fibonacci-number'], [/lru cache/i, 'lru-cache'], [/merge intervals/i, 'merge-intervals'],
+  [/number of islands/i, 'number-of-islands'], [/trapping rain ?water/i, 'trapping-rain-water'], [/best time to buy and sell/i, 'best-time-to-buy-and-sell-stock']
+];
+function practiceLinks(q) {
+  if (subjectOf(q) !== 'Coding & DSA' && subjectOf(q) !== 'SQL & DBMS') return '';
+  const hit = CLASSICS.find(([re]) => re.test(q.text));
+  const terms = q.text.replace(/^(write (a|an) (program|function|code) (to|that|for)|how (would|do) you|explain|implement|given)\s+/i, '')
+    .replace(/[?.]$/, '').split(/\s+/).slice(0, 8).join(' ');
+  const lc = hit ? `https://leetcode.com/problems/${hit[1]}/` : `https://leetcode.com/problemset/?search=${encodeURIComponent(terms)}`;
+  const gfg = `https://www.geeksforgeeks.org/search/?gq=${encodeURIComponent(terms)}`;
+  return `<div class="practice">Practice: <a href="${lc}" target="_blank" rel="noopener noreferrer">${hit ? 'LeetCode problem' : 'Search LeetCode'} ↗</a>
+    <a href="${gfg}" target="_blank" rel="noopener noreferrer">Search GeeksforGeeks ↗</a></div>`;
 }
 
 // ---------- session store (this tab only) ----------
@@ -125,6 +235,7 @@ function addCapture(payload, fallbackCompany) {
   const key = name.toLowerCase();
   const c = store.companies[key] || (store.companies[key] = { name, questions: [], reviews: [] });
   c.experiences = c.experiences || [];
+  c.official = c.official || [];
   const src = payload.source || 'Unknown';
   const now = new Date().toISOString();
   let added = 0;
@@ -150,6 +261,12 @@ function addCapture(payload, fallbackCompany) {
     if (k === '|||' || c.reviews.some(x => x.source === src && x._k === k)) return;
     c.reviews.push({ ...r, review_date: r.date || null, source: src, url: payload.url, created_at: now, _k: k });
     added += 1;
+  });
+
+  (payload.official || []).forEach(pg => {
+    const i = c.official.findIndex(x => x.url === pg.url);
+    const item = { ...pg, source: 'Official', created_at: now };
+    if (i >= 0) c.official[i] = item; else { c.official.push(item); added += 1; }
   });
 
   (payload.experiences || []).forEach(raw => {
@@ -241,7 +358,7 @@ const hasExtension = () => !!document.documentElement.dataset.prepifyExt;
 function pullSources(company, sites = PULLABLE) {
   if (!signedIn()) { openSignin(); return; }
   sites = sites.filter(s => SITES[s] && !SITES[s].linkOnly);
-  const viaServer = sites.filter(s => s === 'Reddit' && auth.sources.reddit_api);
+  const viaServer = sites.filter(s => s === 'Official' || (s === 'Reddit' && auth.sources.reddit_api));
   const viaExtension = sites.filter(s => !viaServer.includes(s));
   viaServer.forEach(s => pullFromServer(company, s));
   if (!viaExtension.length) return;
@@ -257,15 +374,52 @@ async function pullFromServer(company, site) {
   pulls[key] = { status: 'working', step: 'searching ' + site };
   refreshBoxes();
   try {
-    const payload = await getJson(`/api/sources/${site.toLowerCase()}?company=${encodeURIComponent(company)}`);
+    const link = site === 'Official' ? OFFICIAL_LINKS[company.toLowerCase()] : null;
+    const payload = await getJson(`/api/sources/${site.toLowerCase()}?company=${encodeURIComponent(company)}` +
+                                  (link ? `&url=${encodeURIComponent(link)}` : ''));
     const added = addCapture(payload, company);
-    const any = (payload.experiences || []).length || (payload.questions || []).length;
+    const any = (payload.experiences || []).length || (payload.questions || []).length || (payload.official || []).length;
     pulls[key] = { status: any ? 'done' : 'empty', added };
     rerender();
   } catch (e) {
-    pulls[key] = { status: 'error', detail: e.message };
+    const needsUrl = site === 'Official' && /no official page known/i.test(e.message);
+    pulls[key] = { status: needsUrl ? 'needs-url' : 'error', detail: needsUrl ? null : e.message };
     refreshBoxes();
+    if (needsUrl) askOfficialLink(company);
   }
+}
+
+// No careers page known for this company: ask the user for the link once.
+function askOfficialLink(company) {
+  let el = $('#official-modal');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'official-modal';
+    el.className = 'modal';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    document.body.appendChild(el);
+  }
+  el.innerHTML = `
+    <form class="modal-box">
+      <h2>Add ${esc(company)}'s careers page</h2>
+      <p class="modal-sub">Prepify doesn't know ${esc(company)}'s official careers or campus-hiring page yet.
+        Paste its link and Prepify reads the eligibility, selection process and test pattern from it.</p>
+      <input class="qa-filter" id="official-url" type="url" required placeholder="https://www.company.com/careers" aria-label="Careers page link" />
+      <div class="login-actions">
+        <button class="btn primary" type="submit">Read official page</button>
+        <button class="linkbtn" type="button" data-close>Not now</button>
+      </div>
+    </form>`;
+  const close = () => el.remove();
+  el.querySelector('[data-close]').onclick = close;
+  el.querySelector('form').onsubmit = (e) => {
+    e.preventDefault();
+    OFFICIAL_LINKS[company.toLowerCase()] = $('#official-url').value.trim();
+    close();
+    pullFromServer(company, 'Official');
+  };
+  setTimeout(() => $('#official-url').focus(), 0);
 }
 
 function showExtensionNotice() {
@@ -430,6 +584,7 @@ function buildData() {
   }
   return { query: lastParsed.query, parsed: p, company: entry ? { name: entry.name } : null,
            questions, reviews: entry ? entry.reviews : [], experiences: entry ? (entry.experiences || []) : [],
+           official: entry ? (entry.official || []) : [],
            role_matched: roleMatched };
 }
 
@@ -482,7 +637,7 @@ function renderGuest(d) {
   understoodLine(d.parsed);
   if (!d.parsed.company) return noCompany();
   const name = companyName(d);
-  const links = [...Object.entries(SITES), ['Google', GOOGLE]];
+  const links = [...Object.entries(SITES).filter(([, x]) => x.url(name)), ['Google', GOOGLE]];
   $('#report').innerHTML = `
     <div class="notice guest">
       <b>You're browsing as a guest.</b> Guests get links to the sources only. Sign in with Google to pull
@@ -518,7 +673,7 @@ function renderGuest(d) {
 // ---------- signed-in results: source boxes + a dedicated area per site ----------
 function groupBySource(d) {
   const groups = new Map();
-  const blank = (s) => ({ name: s, questions: [], reviews: [], experiences: [], pages: new Map() });
+  const blank = (s) => ({ name: s, questions: [], reviews: [], experiences: [], official: [], pages: new Map() });
   PULLABLE.forEach(s => groups.set(s, blank(s)));
   const add = (x, kind) => {
     const s = x.source || 'Unknown';
@@ -535,25 +690,26 @@ function groupBySource(d) {
   d.questions.forEach(q => add(q, 'questions'));
   d.reviews.forEach(r => add(r, 'reviews'));
   (d.experiences || []).forEach(x => add(x, 'experiences'));
+  (d.official || []).forEach(x => add(x, 'official'));
   groups.forEach(g => {
     g.answers = g.questions.reduce((n, q) => n + (q.answers || []).length, 0);
-    g.newest = [...g.questions, ...g.reviews, ...g.experiences].map(x => x.created_at).sort().at(-1);
+    g.newest = [...g.questions, ...g.reviews, ...g.experiences, ...g.official].map(x => x.created_at).sort().at(-1);
   });
   return [...groups.values()];
 }
-const hasData = (g) => g.questions.length || g.reviews.length || g.experiences.length;
+const hasData = (g) => g.questions.length || g.reviews.length || g.experiences.length || g.official.length;
 
 // Subject of a question, from its wording (sites rarely label it). First match wins,
 // so specific technical subjects come before broad ones like HR.
 const SUBJECTS = [
-  ['SQL & DBMS', /\b(sql|dbms|rdbms|databases?|normali[sz]ation|primary key|foreign key|acid propert|inner join|outer join|left join|right join|sql joins?|stored procedure|indexing|nosql|mongodb|mysql|postgres(ql)?)\b/i],
+  ['SQL & DBMS', /\b(sql|dbms|rdbms|databases?|normali[sz]ation|primary key|foreign key|acid propert|inner join|outer join|left join|right join|sql joins?|stored procedure|indexing|nosql|mongodb|mysql|postgres(ql)?|(second|third|nth|top \d+) highest salary|highest salary|employee table|from the \w+ table|write (a|an) (sql )?query|sql query)\b/i],
   ['OOP', /\b(oops?|object[- ]oriented|inheritance|polymorphism|encapsulation|abstraction|overloading|overriding|abstract class)\b/i],
   ['System Design', /\b(system design|design (a|an|the) |architecture|scalab|high[- ]level design|low[- ]level design|microservices?|load balanc|distributed system|concurrent users)/i],
   ['Data & ML', /\b(machine learning|ml model|data science|forecast|regression|classification|neural|deep learning|llm|nlp|statistic|a\/b test)/i],
   ['Coding & DSA', /\b(array|string|linked ?list|binary tree|tree|graph|sort(ing)?|binary search|dynamic programming|recursion|stack|queue|hash ?map|palindrome|fibonacci|reverse|algorithm|time complexity|leetcode|coding|write a (function|program|code))\b/i],
   ['OS & Networks', /\b(operating system|multithreading|threads?|deadlock|semaphore|paging|virtual memory|computer networks?|networking|tcp|udp|osi model|ip address|dns)\b/i],
   ['Cloud & DevOps', /\b(cloud|aws|azure|gcp|docker|kubernetes|devops|ci\/?cd|git|jenkins|linux)\b/i],
-  ['Languages & Frameworks', /\b(java|python|c\+\+|javascript|typescript|react|angular|spring|node(\.js)?|\.net|html|css|django|flask)\b/i],
+  ['Languages & Frameworks', /(c\+\+|\bc#|\bc language|\bc and c\b|\b(java|python|javascript|typescript|react|angular|spring|node(\.js)?|\.net|html|css|django|flask|golang|kotlin|pointers?)\b)/i],
   ['Aptitude & Reasoning', /\b(aptitude|puzzle|reasoning|probability|percentage|ratio|time and work|logical)\b/i],
   ['Projects & Experience', /\b(projects?|internship|product you built|worked on|final year|your role|previous (job|company)|experience)\b/i],
   ['HR & Behavioral', /\b(yourself|why|strengths?|weakness|relocat|shifts?|salary|ctc|notice period|team|conflict|disagree|challenge|goals?|five years|hobb|motivat|pressure|join|tell me about a time|situation|career|manager)\b/i]
@@ -567,6 +723,7 @@ function subjectOf(q) {
 const STATUS_TEXT = {
   working: 'Reading in the background…',
   login: 'Sign-in needed. Click to sign in.',
+  'needs-url': 'Add the official careers page link. Click to add.',
   blocked: 'Verification needed. Click to continue.',
   'not-found': 'Couldn\'t find an interview page. Click to retry.',
   empty: 'The page had no questions. Click to retry.',
@@ -599,7 +756,15 @@ function sourceCard(g, company) {
         <span class="sc-arrow">${busy ? '' : has ? '→' : '+'}</span>
       </div>
       ${s.host ? `<div class="sc-host">${esc(s.host)}</div>` : ''}
-      ${has ? `
+      ${has && g.official.length ? `
+        <div class="sc-stats">
+          <span><b>${g.official.length}</b> ${g.official.length === 1 ? 'page' : 'pages'}</span>
+          <span><b>${g.official.reduce((n, p) => n + (p.sections || []).length, 0)}</b> sections</span>
+        </div>
+        <div class="sc-preview">${esc(((g.official[0].sections || [])[0] || {}).heading || g.official[0].title || '')}</div>
+        ${statusLine}
+        <div class="sc-foot">Pulled ${fmtDate(g.newest)} · ground truth</div>`
+      : has ? `
         <div class="sc-stats">
           <span><b>${g.experiences.length}</b> ${g.experiences.length === 1 ? 'experience' : 'experiences'}</span>
           <span><b>${g.questions.length}</b> ${g.questions.length === 1 ? 'question' : 'questions'}</span>
@@ -633,6 +798,7 @@ function linkCards(name) {
 
 // ---------- results dashboard + one full page per source ----------
 const TABS = [
+  ['official', 'Official info'],
   ['experiences', 'Experiences'],
   ['questions', 'Questions & answers'],
   ['discussions', 'Discussions'],
@@ -706,7 +872,9 @@ function glance(d, withData) {
           <button class="glance-card" data-open-src="${esc(g.name)}">
             <span class="mark" style="--c:${siteInfo(g.name).color}">${esc(siteInfo(g.name).mark)}</span>
             <span class="glance-name">${esc(g.name)}</span>
-            <span class="glance-nums">${plural(g.experiences.length, 'experience')} · ${plural(g.questions.length, 'question')}${g.reviews.length ? ' · ' + plural(g.reviews.length, 'review') : ''}</span>
+            <span class="glance-nums">${g.official.length
+              ? `${plural(g.official.length, 'official page')} · ${plural(g.official.reduce((n, pg) => n + (pg.sections || []).length, 0), 'section')}`
+              : `${plural(g.experiences.length, 'experience')} · ${plural(g.questions.length, 'question')}${g.reviews.length ? ' · ' + plural(g.reviews.length, 'review') : ''}`}</span>
             <span class="glance-open">Open page →</span>
           </button>`).join('')}
       </div>
@@ -744,6 +912,7 @@ function wireCards(name) {
       showLoginPrompt(src, name, pull.status);
       return;
     }
+    if (pull && pull.status === 'needs-url') { askOfficialLink(name); return; }
     if (card.classList.contains('empty-card') || failed) {
       if (SITES[src]) pullSources(name, [src]);
       return;
@@ -769,6 +938,7 @@ function renderSourcePage(d, g, groups) {
   const name = companyName(d);
   const s = siteInfo(g.name);
   const counts = {
+    official: g.official.length,
     experiences: g.experiences.length,
     questions: g.questions.length,
     discussions: g.experiences.filter(x => (x.discussion || []).length).length,
@@ -795,12 +965,14 @@ function renderSourcePage(d, g, groups) {
       <span class="mark big" style="--c:${s.color}">${esc(s.mark)}</span>
       <div class="hero-text">
         <h1>${esc(g.name)} <span class="dim">· ${esc(name)}</span></h1>
-        <div class="sub">${plural(counts.experiences, 'experience')} · ${plural(counts.questions, 'question')} · ${plural(g.answers, 'answer')}${counts.reviews ? ' · ' + plural(counts.reviews, 'review') : ''} · pulled ${fmtDate(g.newest)}</div>
+        <div class="sub">${g.official.length
+          ? `${plural(g.official.length, 'official page')} · ${plural(g.official.reduce((n, pg) => n + (pg.sections || []).length, 0), 'section')}`
+          : `${plural(counts.experiences, 'experience')} · ${plural(counts.questions, 'question')} · ${plural(g.answers, 'answer')}${counts.reviews ? ' · ' + plural(counts.reviews, 'review') : ''}`} · pulled ${fmtDate(g.newest)}</div>
       </div>
       <div class="head-actions">
         <button class="btn primary" data-pdf="${esc(g.name)}">Download PDF</button>
         ${SITES[g.name] && !SITES[g.name].linkOnly ? `<button class="btn" id="refresh-src" data-src="${esc(g.name)}">Pull again</button>` : ''}
-        ${s.url ? `<a class="btn" href="${s.url(name)}" target="_blank" rel="noopener noreferrer">Open ${esc(g.name)} ↗</a>` : ''}
+        ${s.url && s.url(name) ? `<a class="btn" href="${s.url(name)}" target="_blank" rel="noopener noreferrer">Open ${esc(g.name)} ↗</a>` : ''}
       </div>
     </header>
 
@@ -831,6 +1003,21 @@ function renderSourcePage(d, g, groups) {
 }
 
 function tabBody(k, g, groups) {
+  if (k === 'official') {
+    return `<div class="official-list">${g.official.map(pg => `
+      <article class="official-page">
+        <header>
+          <a class="thread-title" href="${esc(pg.url)}" target="_blank" rel="noopener noreferrer">${esc(pg.title)} ↗</a>
+          <div class="thread-meta">Official page · read ${fmtDate(pg.created_at)}</div>
+        </header>
+        ${(pg.sections || []).map(sec => `
+          <section class="official-section">
+            <h3>${esc(sec.heading)}</h3>
+            ${richText(sec.text)}
+          </section>`).join('')}
+      </article>`).join('')}</div>`;
+  }
+
   if (k === 'experiences') {
     const list = [...g.experiences].sort(byDateDesc);
     const counts = { good: 0, bad: 0, none: 0 };
@@ -874,8 +1061,8 @@ function tabBody(k, g, groups) {
           <a class="thread-title" href="${esc(x.url || '#')}" target="_blank" rel="noopener noreferrer">${esc(x.role || 'Discussion')}</a>
           <div class="thread-meta">${esc([x.location, x.date].filter(Boolean).join(' · '))}${x.score ? ` · ▲ ${esc(x.score)}` : ''}${x.comments ? ` · ${plural(x.comments, 'comment')}` : ''}</div>
         </header>
-        ${x.process ? `<details class="thread-post"><summary>Original post</summary><p>${esc(x.process)}</p></details>` : ''}
-        <ul class="xp-discussion">${x.discussion.map(c => `<li><span class="score">▲ ${esc(c.score)}</span><p>${esc(c.text)}</p></li>`).join('')}</ul>
+        ${x.process ? `<details class="thread-post"><summary>Original post</summary>${richText(x.process)}</details>` : ''}
+        <ul class="xp-discussion">${x.discussion.map(c => `<li><span class="score">▲ ${esc(c.score)}</span>${richText(c.text)}</li>`).join('')}</ul>
       </article>`).join('')}</div>`;
   }
 
@@ -960,13 +1147,13 @@ function experienceKind(t) {
 
 function xpCard(x, i) {
   const block = (label, body) => body ? `<div class="xp-block"><div class="xp-label">${label}</div>${body}</div>` : '';
-  const para = (t) => t ? `<p>${esc(t)}</p>` : '';
+  const para = (t) => t ? richText(t) : '';
   const rounds = (x.rounds || []).length
-    ? `<ol class="xp-rounds">${x.rounds.map(r => `<li><b>${esc(r.name)}</b>${r.detail ? `<span>${esc(r.detail)}</span>` : ''}</li>`).join('')}</ol>` : '';
+    ? `<ol class="xp-rounds">${x.rounds.map(r => `<li><b>${esc(r.name)}</b>${r.detail ? richText(r.detail) : ''}</li>`).join('')}</ol>` : '';
   const qs = (x.questions || []).length
     ? `<ol class="xp-questions">${x.questions.map(q => `<li><span>${esc(q.text)}</span>${(q.answers || []).map((a, j) =>
-        `<div class="answer"><div class="a-label">Answer${q.answers.length > 1 ? ' ' + (j + 1) : ''}</div>${esc(a)}</div>`).join('')}</li>`).join('')}</ol>` : '';
-  const preview = x.process || x.application || (x.rounds && x.rounds[0] && `${x.rounds[0].name}: ${x.rounds[0].detail}`) || '';
+        `<div class="answer"><div class="a-label">Answer${q.answers.length > 1 ? ' ' + (j + 1) : ''}</div>${richText(a)}</div>`).join('')}${practiceLinks(q)}</li>`).join('')}</ol>` : '';
+  const preview = tidyText(x.process || x.application || (x.rounds && x.rounds[0] && `${x.rounds[0].name}: ${x.rounds[0].detail}`) || '').replace(/\n/g, ' ');
   const title = cleanRole(x.role) || `Interview experience ${i + 1}`;
   return `
     <details class="xp-card" data-outcome="${outcomeKind(x.outcome) || 'none'}" ${i === 0 ? 'open' : ''}>
@@ -989,7 +1176,7 @@ function xpCard(x, i) {
         ${block('Questions asked', qs)}
         ${block('Tips', para(x.tips))}
         ${(x.discussion || []).length ? block(`Discussion · top ${plural(x.discussion.length, 'comment')}`,
-          `<ul class="xp-discussion">${x.discussion.map(c => `<li><span class="score">▲ ${esc(c.score)}</span><p>${esc(c.text)}</p></li>`).join('')}</ul>`) : ''}
+          `<ul class="xp-discussion">${x.discussion.map(c => `<li><span class="score">▲ ${esc(c.score)}</span>${richText(c.text)}</li>`).join('')}</ul>`) : ''}
         ${x.url ? `<div class="meta">Pulled ${fmtDate(x.created_at)} · <a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">Source page</a></div>` : ''}
       </div>
     </details>`;
@@ -1009,12 +1196,13 @@ function qaCard(q, i, site, alsoOn) {
         ${alsoOn ? `<span class="tag good">Also on ${esc(alsoOn)}</span>` : ''}
       </div>
       ${first
-        ? `<div class="answer"><div class="a-label">Answer${answers.length > 1 ? ' 1' : ''}</div>${esc(first)}</div>
+        ? `<div class="answer"><div class="a-label">Answer${answers.length > 1 ? ' 1' : ''}</div>${richText(first)}</div>
            ${rest.length ? `
              <div class="more-answers hidden">${rest.map((a, j) =>
-               `<div class="answer"><div class="a-label">Answer ${j + 2}</div>${esc(a)}</div>`).join('')}</div>
+               `<div class="answer"><div class="a-label">Answer ${j + 2}</div>${richText(a)}</div>`).join('')}</div>
              <button class="linkbtn more-btn">Show ${plural(rest.length, 'more answer')}</button>` : ''}`
         : `<div class="answer none">No answer shown on ${esc(site)}</div>`}
+      ${practiceLinks(q)}
     </article>`;
 }
 
@@ -1022,9 +1210,9 @@ function reviewHtml(r) {
   return `
     <div class="result">
       <div class="title">${esc(r.title || r.job_title || 'Review')}${r.rating ? ` · ${r.rating}/5` : ''}</div>
-      ${r.pros ? `<div class="pros"><b>Pros</b>${esc(r.pros)}</div>` : ''}
-      ${r.cons ? `<div class="cons"><b>Cons</b>${esc(r.cons)}</div>` : ''}
-      ${r.body ? `<div class="pros">${esc(r.body)}</div>` : ''}
+      ${r.pros ? `<div class="pros"><b>Pros</b>${esc(tidyText(r.pros))}</div>` : ''}
+      ${r.cons ? `<div class="cons"><b>Cons</b>${esc(tidyText(r.cons))}</div>` : ''}
+      ${r.body ? richText(r.body) : ''}
       <div class="meta">${r.job_title ? esc(r.job_title) + ' · ' : ''}${r.review_date ? esc(r.review_date) + ' · ' : ''}Pulled ${fmtDate(r.created_at)}</div>
     </div>`;
 }
@@ -1111,6 +1299,24 @@ async function downloadPdf(d, only = null) {
     y += o.after === undefined ? 4 : o.after;
   };
   const rule = (color = [220, 220, 220]) => { ensure(10); doc.setDrawColor(...color); doc.line(M, y, W - M, y); y += 10; };
+  // label (bold) + cleaned text as paragraphs and numbered/bulleted lists with hanging indents
+  const writeRich = (label, text, o = {}) => {
+    const blocks = textBlocks(text);
+    if (!blocks.length) return;
+    const indent = o.indent || 0;
+    if (label) write(label, { bold: true, indent, size: o.size || 10, after: 2 });
+    blocks.forEach(b => {
+      if (b.type === 'p') write(b.text, { indent: indent + (label ? 8 : 0), color: o.color, size: o.size, after: 3 });
+      else b.items.forEach((item, i) => {
+        const mark = b.type === 'ol' ? `${i + 1}.` : '-';
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(o.size || 10); doc.setTextColor(...(o.color || [30, 30, 30]));
+        ensure(14);
+        doc.text(mark, M + indent + (label ? 8 : 0), y + (o.size || 10));
+        write(item, { indent: indent + (label ? 8 : 0) + 16, color: o.color, size: o.size, after: 2 });
+      });
+    });
+    y += 2;
+  };
 
   const name = companyName(d);
   const groups = groupBySource(d).filter(hasData).filter(g => !only || g.name === only);
@@ -1120,13 +1326,22 @@ async function downloadPdf(d, only = null) {
   write(`${name}: interview preparation`, { size: 20, bold: true, after: 6 });
   write(`Prepared with Prepify on ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}` +
         ` for "${d.query}"`, { size: 9, color: muted, after: 2 });
-  write('Sources: ' + groups.map(g => `${g.name} (${plural(g.experiences.length, 'experience')}, ${plural(g.questions.length, 'question')})`).join(', '),
+  write('Sources: ' + groups.map(g => g.name === 'Official' ? `Official (${plural(g.official.length, 'page')})`
+        : `${g.name} (${plural(g.experiences.length, 'experience')}, ${plural(g.questions.length, 'question')})`).join(', '),
         { size: 9, color: muted, after: 14 });
   rule();
 
+  groups.sort((a, b) => (b.name === 'Official') - (a.name === 'Official'));
   groups.forEach((g, gi) => {
     if (gi > 0) { y += 10; }
-    write(g.name, { size: 16, bold: true, color: accent, after: 8 });
+    write(g.name === 'Official' ? 'Official information' : g.name, { size: 16, bold: true, color: accent, after: 8 });
+
+    g.official.forEach(pg => {
+      write(pg.title, { size: 12, bold: true, after: 2 });
+      write(pg.url, { size: 8, color: muted, after: 6 });
+      (pg.sections || []).forEach(sec => writeRich(sec.heading, sec.text, { indent: 6 }));
+      y += 6;
+    });
 
     if (g.experiences.length) {
       write('Interview experiences', { size: 13, bold: true, after: 6 });
@@ -1136,21 +1351,21 @@ async function downloadPdf(d, only = null) {
         write(`${i + 1}. ${title}${x.date ? '  -  ' + x.date : ''}${x.location ? ', ' + x.location : ''}`, { size: 11, bold: true, after: 2 });
         const facts = [x.outcome, x.experience, x.difficulty].filter(Boolean).map(sentence).join(' | ');
         if (facts) write(facts, { size: 9, color: muted, indent: 14, after: 4 });
-        if (x.application) write('How they applied: ' + x.application, { indent: 14 });
-        if (x.process) write('Interview process: ' + x.process, { indent: 14 });
-        (x.rounds || []).forEach(r => write(`${r.name}${r.detail ? ': ' + r.detail : ''}`, { indent: 14 }));
+        if (x.application) writeRich('How they applied', x.application, { indent: 14 });
+        if (x.process) writeRich('Interview process', x.process, { indent: 14 });
+        (x.rounds || []).forEach(r => writeRich(r.name, r.detail || '', { indent: 14 }) || (!r.detail && write(r.name, { bold: true, indent: 14 })));
         if ((x.questions || []).length) {
           write('Questions asked:', { bold: true, indent: 14, after: 2 });
           x.questions.forEach((q, qi) => {
             write(`${qi + 1}. ${q.text}`, { indent: 24, after: 2 });
-            (q.answers || []).forEach(a => write('Answer: ' + a, { indent: 36, color: muted, after: 2 }));
+            (q.answers || []).forEach(a => writeRich('Answer', a, { indent: 36, color: muted }));
           });
           y += 2;
         }
-        if (x.tips) write('Tips: ' + x.tips, { indent: 14 });
+        if (x.tips) writeRich('Tips', x.tips, { indent: 14 });
         if ((x.discussion || []).length) {
           write('Discussion (top comments):', { bold: true, indent: 14, after: 2 });
-          x.discussion.slice(0, 3).forEach(c => write(`- ${c.text.slice(0, 600)}`, { indent: 24, color: muted, after: 3 }));
+          x.discussion.slice(0, 3).forEach(c => writeRich(null, '- ' + tidyText(c.text).slice(0, 600).replace(/\n/g, ' '), { indent: 24, color: muted }));
         }
         y += 6;
       });
@@ -1169,7 +1384,7 @@ async function downloadPdf(d, only = null) {
           num += 1;
           write(`Q${num}. ${q.text}`, { bold: true, indent: 10, after: 2 });
           const answers = q.answers || [];
-          if (answers.length) answers.forEach((a, ai) => write(`Answer${answers.length > 1 ? ' ' + (ai + 1) : ''}: ${a}`, { indent: 26, color: muted, after: 3 }));
+          if (answers.length) answers.forEach((a, ai) => writeRich(`Answer${answers.length > 1 ? ' ' + (ai + 1) : ''}`, a, { indent: 26, color: muted }));
           else write(`No answer shown on ${g.name}.`, { indent: 26, color: [160, 160, 160], italic: true, after: 3 });
           y += 3;
         });
@@ -1181,8 +1396,8 @@ async function downloadPdf(d, only = null) {
       write('Reviews', { size: 13, bold: true, after: 6 });
       g.reviews.forEach(r => {
         write(`${r.title || r.job_title || 'Review'}${r.rating ? ' (' + r.rating + '/5)' : ''}`, { bold: true, after: 2 });
-        if (r.pros) write('Pros: ' + r.pros, { indent: 14, after: 2 });
-        if (r.cons) write('Cons: ' + r.cons, { indent: 14, after: 2 });
+        if (r.pros) write('Pros: ' + tidyText(r.pros), { indent: 14, after: 2 });
+        if (r.cons) write('Cons: ' + tidyText(r.cons), { indent: 14, after: 2 });
         y += 4;
       });
     }

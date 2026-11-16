@@ -6,6 +6,9 @@
   const SOURCE = host.includes('ambitionbox') ? 'AmbitionBox'
     : host.includes('indeed') ? 'Indeed'
     : host.includes('reddit') ? 'Reddit'
+    : host.includes('leetcode') ? 'LeetCode'
+    : host.includes('prepinsta') ? 'PrepInsta'
+    : host.includes('naukri') ? 'Code360'
     : host.includes('geeksforgeeks') ? 'GeeksforGeeks'
     : 'Glassdoor';
 
@@ -235,6 +238,7 @@
   // Everything readable on this page. Questions found inside experiences are also listed on
   // their own (with their answers) so the Q&A view has them too.
   function collect() {
+    if (ARTICLE_SOURCES[SOURCE] && isArticlePage()) return readArticlePage();
     const experiences = SOURCE === 'GeeksforGeeks' && isArticlePage() ? [extractArticle()]
       : SOURCE === 'Reddit' ? [extractRedditThread()].filter(Boolean)
       : extractExperiences();
@@ -317,7 +321,7 @@
     if (SOURCE === 'Glassdoor') return /\/Interview\//i.test(location.pathname);
     if (SOURCE === 'AmbitionBox') return /\/interviews\//i.test(location.pathname);
     if (SOURCE === 'Indeed') return /\/cmp\/[^/]+\/interviews/i.test(location.pathname);
-    if (SOURCE === 'GeeksforGeeks') return isArticlePage();
+    if (ARTICLE_SOURCES[SOURCE]) return isArticlePage();
     return false;
   }
 
@@ -432,26 +436,80 @@
     };
   }
 
-  // ---------- article sources (GeeksforGeeks interview experiences) ----------
+  // ---------- article sources: a search/list page, then up to 4 article pages ----------
+  // article: is this page a single write-up?  link: is this href an article worth reading?
+  // fallback(company): where to go when the list page has nothing.
+  const ARTICLE_SOURCES = {
+    GeeksforGeeks: {
+      article: () => /interview/i.test(document.title + ' ' + location.pathname) && !/\/(search|tag|category)\b/i.test(location.pathname),
+      link: (h) => /geeksforgeeks\.org\/[a-z0-9-]+/.test(h) && !/\/(tag|category|search|user)\//.test(h),
+      fallback: (c) => /\/tag\//.test(location.pathname) ? null : `${location.origin}/tag/${slug(c)}/`
+    },
+    LeetCode: {
+      article: () => /\/discuss\/(post\/\d+|interview-experience\/\d+|[a-z-]+\/\d+)/i.test(location.pathname),
+      link: (h) => /leetcode\.com\/discuss\/(post\/\d+|interview-experience\/\d+|[a-z-]+\/\d+)/i.test(h),
+      fallback: () => null
+    },
+    PrepInsta: {
+      article: () => /prepinsta\.com\/[a-z0-9-]+\/[a-z0-9-]+/i.test(location.href) && !/[?&]s=/.test(location.search),
+      link: (h) => /prepinsta\.com\/[a-z0-9-]+\/[a-z0-9-]*(interview|recruitment|selection|placement|syllabus|pattern|questions)/i.test(h),
+      fallback: (c) => /[?&]s=/.test(location.search) ? `${location.origin}/${slug(c).split('-')[0]}/` : null
+    },
+    Code360: {
+      article: () => /\/code360\/interview-experiences\/[^/]+\/[^/?#]+/i.test(location.pathname),
+      link: (h) => /naukri\.com\/code360\/interview-experiences\/[^/]+\/[^/?#]+/i.test(h),
+      fallback: (c) => {
+        const first = slug(c).split('-')[0];
+        return location.pathname.endsWith('/' + first) ? null : `${location.origin}/code360/interview-experiences/${first}`;
+      }
+    }
+  };
+
   function isArticlePage() {
-    return !!document.querySelector('article h1, main h1, h1') && /interview/i.test(document.title + ' ' + location.pathname)
-      && !/\/(search|tag|category)\b/i.test(location.pathname);
+    const cfg = ARTICLE_SOURCES[SOURCE];
+    return !!cfg && !!document.querySelector('article h1, main h1, h1') && cfg.article();
   }
 
-  // Interview-experience article links on a search or tag page, best matches first.
+  // Article links on a search or list page that mention the company, best matches first.
   function articleLinks(company) {
+    const cfg = ARTICLE_SOURCES[SOURCE];
     const want = slug(company).split('-')[0];
     const seen = new Set();
     return [...document.querySelectorAll('a[href]')]
       .filter(a => {
         const h = a.href.split('#')[0].split('?')[0];
         const text = (a.textContent + ' ' + h).toLowerCase();
-        if (seen.has(h) || !/geeksforgeeks\.org\/[a-z0-9-]+/.test(h) || /\/(tag|category|search|user)\//.test(h)) return false;
-        if (!/interview/.test(text) || !text.includes(want)) return false;
+        if (seen.has(h) || h === location.href.split('?')[0] || !cfg.link(h)) return false;
+        if (!text.includes(want) || !/interview|experience|question|recruit|selection|placement|round|syllabus|pattern/.test(text)) return false;
         seen.add(h);
         return true;
       })
       .map(a => a.href.split('#')[0].split('?')[0]);
+  }
+
+  // Question-and-answer pages (PrepInsta, GfG "interview questions"): a heading or bold line that is a
+  // question, followed by its answer, until the next question.
+  function extractQA(root) {
+    const isQuestion = (t) => t.length > 8 && t.length < 400 && (/\?$/.test(t) || /^(q|question)\s*\d+/i.test(t));
+    const nodes = [...root.querySelectorAll('h2, h3, h4, h5, p, li, strong, b, pre')];
+    const out = [];
+    let cur = null;
+    nodes.forEach(el => {
+      const t = clean(el.textContent);
+      if (!t) return;
+      const headingish = /^H[2-5]$/.test(el.tagName) || (/^(STRONG|B)$/.test(el.tagName) && el.parentElement && clean(el.parentElement.textContent) === t);
+      if (headingish && isQuestion(t)) {
+        cur = { text: stripQLabel(t).replace(/^[:.)\-\s]+/, ''), answers: [], _parts: [] };
+        out.push(cur);
+        return;
+      }
+      if (headingish && /^H[2-4]$/.test(el.tagName)) { cur = null; return; }
+      if (cur && /^(P|LI|PRE)$/.test(el.tagName) && cur._parts.join(' ').length < 2500) {
+        cur._parts.push((el.tagName === 'LI' ? '- ' : '') + (el.tagName === 'PRE' ? el.innerText : t).replace(/^(ans(wer)?|solution)\s*[:.-]\s*/i, ''));
+      }
+    });
+    return out.map(q => ({ text: q.text, answers: q._parts.length ? [q._parts.join('\n')] : [] }))
+              .filter(q => q.text.length > 8);
   }
 
   // Questions written into free text: lines/items that end in "?" or start with "Q1." etc.
@@ -468,9 +526,22 @@
     return out;
   }
 
+  // One article page -> payload parts. Q&A pages give questions with answers; write-ups give an experience.
+  function readArticlePage() {
+    const root = document.querySelector('article, .entry-content, [class*="post-content" i], main') || document.body;
+    const qa = extractQA(root);
+    const xp = extractArticle();
+    if (qa.length >= 3 && xp.rounds.length < 2) {
+      return { questions: qa.map(q => ({ ...q, role: xp.role })), reviews: [], experiences: [] };
+    }
+    const byText = new Map(qa.map(q => [q.text, q]));
+    xp.questions = xp.questions.map(q => byText.get(q.text) || q);
+    return { questions: xp.questions.map(q => ({ ...q, role: xp.role })), reviews: [], experiences: [xp] };
+  }
+
   // One article = one experience: title, date, rounds (from headings), questions, write-up.
   function extractArticle() {
-    const root = document.querySelector('article') || document.querySelector('main') || document.body;
+    const root = document.querySelector('article, .entry-content, [class*="post-content" i], [class*="discuss" i] [class*="content" i], main') || document.body;
     const h1 = root.querySelector('h1') || document.querySelector('h1');
     const title = clean(h1 && h1.textContent);
     const dateText = clean((document.querySelector('time') || {}).textContent || '') ||
@@ -555,20 +626,17 @@
       }
     }
 
-    // GeeksforGeeks: queue a few interview-experience articles, then read each one
-    if (SOURCE === 'GeeksforGeeks') {
-      if (isArticlePage()) {
-        const xp = extractArticle();
-        const payload = { source: SOURCE, url: location.href, company_name: job.company,
-                          questions: xp.questions.map(q => ({ ...q, role: xp.role })), reviews: [], experiences: [xp] };
+    // Article sources (GeeksforGeeks, LeetCode Discuss, PrepInsta, Code360): queue a few articles, read each
+    if (ARTICLE_SOURCES[SOURCE]) {
+      if (job.reading || isArticlePage()) {
+        const payload = { source: SOURCE, url: location.href, company_name: job.company, ...readArticlePage() };
         return send({ type: 'research:partial', payload, url: location.href });
       }
       const links = articleLinks(job.company);
       if (links.length) return send({ type: 'research:queue', urls: links.slice(0, 4), step: `reading ${Math.min(links.length, 4)} articles` });
-      if (!/\/tag\//.test(location.pathname)) {
-        return send({ type: 'research:navigate', url: `${location.origin}/tag/${slug(job.company)}/`, step: 'opening company tag page' });
-      }
-      return fail('not-found');
+      const next = ARTICLE_SOURCES[SOURCE].fallback(job.company);
+      if (next && next !== location.href) return send({ type: 'research:navigate', url: next, step: 'opening company page' });
+      return fail(looksLikeLoginWall() ? 'login' : 'not-found');
     }
 
     if (!isInterviewPage()) {

@@ -268,6 +268,124 @@ def reddit_source():
         return jsonify({'error': f'Reddit request failed: {type(e).__name__}'}), 502
 
 
+# ---------- Official careers / campus pages (ground truth) ----------
+# Public company pages, fetched on request, robots.txt respected, nothing stored.
+# Known recruiters map to their careers pages; any other company needs the user to paste the link.
+OFFICIAL_PAGES = {
+    'tcs': 'https://www.tcs.com/careers',
+    'tata consultancy services': 'https://www.tcs.com/careers',
+    'infosys': 'https://www.infosys.com/careers/',
+    'accenture': 'https://www.accenture.com/in-en/careers',
+    'wipro': 'https://careers.wipro.com/',
+    'cognizant': 'https://careers.cognizant.com/',
+    'capgemini': 'https://www.capgemini.com/in-en/careers/',
+    'hcl': 'https://www.hcltech.com/careers',
+    'hcltech': 'https://www.hcltech.com/careers',
+    'tech mahindra': 'https://careers.techmahindra.com/',
+    'deloitte': 'https://www2.deloitte.com/in/en/careers.html',
+    'amazon': 'https://www.amazon.jobs/en/',
+    'microsoft': 'https://careers.microsoft.com/',
+    'google': 'https://www.google.com/about/careers/applications/',
+    'target': 'https://india.target.com/',
+    'target corporation': 'https://india.target.com/',
+    'cme group': 'https://www.cmegroup.com/careers.html',
+}
+OFFICIAL_UA = 'Prepify/0.6 (personal interview preparation; reads public careers pages)'
+OFFICIAL_LINK_WORDS = re.compile(r'campus|graduate|fresher|freshers|students?|universit|early.?career|entry.?level|'
+                                 r'eligib|selection|hiring process|recruitment|how we hire|interview|internship', re.I)
+OFFICIAL_SECTION_WORDS = re.compile(r'\b(eligib\w*|selection|hiring process|recruitment process|interview rounds?|online tests?|coding tests?|aptitude|'
+                                    r'assessments?|interviews?|pattern|how to apply|qualif\w*|criteria|campus|graduates?|'
+                                    r'freshers?|what to expect|prepar\w*)\b', re.I)
+
+
+def _allowed_by_robots(url):
+    from urllib import robotparser
+    from urllib.parse import urlsplit
+    import requests
+    parts = urlsplit(url)
+    rp = robotparser.RobotFileParser()
+    try:
+        r = requests.get(f'{parts.scheme}://{parts.netloc}/robots.txt', headers={'User-Agent': OFFICIAL_UA}, timeout=10)
+        if r.status_code >= 400:
+            return True                      # no robots.txt: allowed
+        rp.parse(r.text.splitlines())
+        return rp.can_fetch(OFFICIAL_UA, url)
+    except Exception:
+        return True
+
+
+def _read_official_page(url):
+    """Title, relevant sections (heading + paragraphs/list items) and promising same-site links."""
+    import requests
+    from bs4 import BeautifulSoup
+    from urllib.parse import urljoin, urlsplit
+    r = requests.get(url, headers={'User-Agent': OFFICIAL_UA, 'Accept-Language': 'en-IN,en;q=0.8'}, timeout=15)
+    r.raise_for_status()
+    if 'html' not in r.headers.get('content-type', ''):
+        return None
+    soup = BeautifulSoup(r.text, 'lxml')
+    for tag in soup(['script', 'style', 'noscript', 'svg', 'nav', 'footer', 'header', 'form', 'iframe']):
+        tag.decompose()
+    title = (soup.title.get_text(' ', strip=True) if soup.title else url)[:160]
+
+    sections, current = [], None
+    for el in soup.find_all(['h1', 'h2', 'h3', 'h4', 'p', 'li']):
+        text = ' '.join(el.get_text(' ', strip=True).split())
+        if not text:
+            continue
+        if el.name in ('h1', 'h2', 'h3', 'h4'):
+            current = {'heading': text[:160], 'text': []}
+            sections.append(current)
+        elif current is not None and len(text) > 20 and len(current['text']) < 25:
+            current['text'].append(('- ' if el.name == 'li' else '') + text[:800])
+    sections = [{'heading': s['heading'], 'text': '\n'.join(s['text'])} for s in sections
+                if s['text'] and OFFICIAL_SECTION_WORDS.search(s['heading'] + ' ' + ' '.join(s['text'])[:400])][:12]
+
+    host = urlsplit(r.url).netloc
+    links = []
+    for a in soup.find_all('a', href=True):
+        href = urljoin(r.url, a['href']).split('#')[0]
+        label = ' '.join(a.get_text(' ', strip=True).split())
+        if urlsplit(href).netloc == host and href != r.url and OFFICIAL_LINK_WORDS.search(label + ' ' + href):
+            links.append(href)
+    return {'title': title, 'url': r.url, 'sections': sections, 'links': list(dict.fromkeys(links))[:6]}
+
+
+@app.route('/api/sources/official', methods=['GET'])
+def official_source():
+    if not current_user():
+        return jsonify({'error': 'sign in to pull sources'}), 401
+    company = (request.args.get('company') or '').strip()[:100]
+    url = (request.args.get('url') or '').strip()
+    if not url:
+        url = OFFICIAL_PAGES.get(company.lower()) or OFFICIAL_PAGES.get(company.lower().split(' ')[0], '')
+    if not url:
+        return jsonify({'error': 'no official page known', 'needs_url': True}), 404
+    from urllib.parse import urlsplit
+    if urlsplit(url).scheme not in ('http', 'https') or not urlsplit(url).netloc:
+        return jsonify({'error': 'that is not a web address'}), 400
+
+    pages, seen, queue = [], set(), [url]
+    while queue and len(pages) < 4:
+        u = queue.pop(0)
+        if u in seen:
+            continue
+        seen.add(u)
+        if not _allowed_by_robots(u):
+            continue
+        try:
+            page = _read_official_page(u)
+        except Exception:
+            continue
+        if not page:
+            continue
+        if page['sections']:
+            pages.append({'title': page['title'], 'url': page['url'], 'sections': page['sections']})
+        queue += [l for l in page['links'] if l not in seen]
+    return jsonify({'source': 'Official', 'url': url, 'company_name': company,
+                    'official': pages, 'questions': [], 'reviews': [], 'experiences': []})
+
+
 # ---------- Pages ----------
 @app.route('/')
 def home():

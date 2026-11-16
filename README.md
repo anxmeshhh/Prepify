@@ -49,10 +49,14 @@ When you click a source box, the extension opens that site in a background tab a
 
 | Source | How Prepify reads it | What you get |
 | --- | --- | --- |
+| Official careers page | Prepify server fetches the company's public careers or campus page (robots.txt respected, nothing stored). Known for major Indian recruiters; for other companies you paste the link once | Eligibility, selection process, test pattern: the ground truth |
 | Glassdoor | Extension, in your own signed-in Chrome | Interview experiences, questions, answers |
 | AmbitionBox | Extension | Experiences with rounds, questions, answers, tips |
 | Indeed | Extension (same login as Glassdoor); tries the company page directly if search has no link | Interview experiences and questions |
 | GeeksforGeeks | Extension: searches "<company> interview experience" and reads up to 4 articles | Round-by-round write-ups, questions, tips |
+| Naukri Code360 | Extension: the company's interview-experience list, then up to 4 experiences | Round-by-round experiences with problems asked |
+| PrepInsta | Extension: site search, then up to 4 company pages (interview questions, recruitment process) | Questions with answers, recruitment process |
+| LeetCode Discuss | Extension: interview-experience posts mentioning the company | Candidate write-ups, coding questions |
 | Reddit | Extension reads old.reddit.com search and up to 4 threads (no setup). If `REDDIT_CLIENT_ID` is set, the official API on the Prepify server is used instead | Threads with the original post and top comments |
 | LinkedIn | Links only | LinkedIn doesn't allow automated reading, so Prepify only links to posts |
 
@@ -62,6 +66,9 @@ When you click a source box, the extension opens that site in a background tab a
 2. Copy the client ID, the short string under the app name, into `.env` as `REDDIT_CLIENT_ID=...`, then restart Prepify. No secret and no Reddit login are needed. Results go straight to your browser and the server stores nothing.
 
 ## Using results
+
+- **Clean presentation:** site text is tidied before display and in the PDF. Leftover page clutter ("Helpful", "Read more", "Answer question") is removed, run-together steps become numbered lists, bullets become lists, very long text is split into paragraphs, and repeated paragraphs are dropped.
+- **Practice links:** coding and SQL questions link to the matching LeetCode problem for common classics, otherwise to a LeetCode or GeeksforGeeks search.
 
 - **Dashboard:** one box per source. Click a filled box to open that source's own page, or an empty box to pull it.
 - **Source page:** tabs for *Experiences*, *Questions & answers*, *Discussions*, *Reviews* and *Source pages*, with filters by outcome or subject, a switcher between sources and **Back to results**. Browser back and forward work too.

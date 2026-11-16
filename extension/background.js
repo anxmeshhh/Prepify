@@ -18,7 +18,10 @@ const START_URL = {
   Indeed: (c) => `https://in.indeed.com/companies/search?q=${encodeURIComponent(c)}`,
   GeeksforGeeks: (c) => `https://www.geeksforgeeks.org/search/?gq=${encodeURIComponent(c + ' interview experience')}`,
   // old.reddit.com is plain HTML: search, then read the top threads like articles
-  Reddit: (c) => `https://old.reddit.com/search?q=${encodeURIComponent(c + ' interview')}&sort=relevance&t=all`
+  Reddit: (c) => `https://old.reddit.com/search?q=${encodeURIComponent(c + ' interview')}&sort=relevance&t=all`,
+  LeetCode: (c) => `https://leetcode.com/discuss/interview-experience?currentPage=1&orderBy=most_relevant&query=${encodeURIComponent(c)}`,
+  PrepInsta: (c) => `https://prepinsta.com/?s=${encodeURIComponent(c + ' interview')}`,
+  Code360: (c) => `https://www.naukri.com/code360/interview-experiences/${c.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`
 };
 const API_SOURCES = {};
 
@@ -200,6 +203,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const job = jobs[tabId];
       if (!job) return;
       job.queue = (msg.urls || []).slice(0, MAX_ARTICLES);
+      job.reading = true;                      // pages from here on are articles, never list pages
       job.acc = job.acc || emptyPayload(job);
       const next = job.queue.shift();
       await setJobs(jobs);
@@ -268,7 +272,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const host = new URL(tab.url).hostname;
   const source = host.includes('ambitionbox') ? 'AmbitionBox' : host.includes('glassdoor') ? 'Glassdoor'
     : host.includes('indeed') ? 'Indeed' : host.includes('geeksforgeeks') ? 'GeeksforGeeks'
-    : host.includes('reddit') ? 'Reddit' : host;
+    : host.includes('reddit') ? 'Reddit' : host.includes('leetcode') ? 'LeetCode'
+    : host.includes('prepinsta') ? 'PrepInsta' : host.includes('naukri') ? 'Code360' : host;
   const n = await sendToApp({ source, url: tab.url, questions: [{ text: info.selectionText.trim() }] });
   const msg = n ? 'Sent to Prepify' : 'Open Prepify (localhost:5000) in a tab first';
   chrome.tabs.sendMessage(tab.id, { type: 'toast', text: msg }).catch(() => {});

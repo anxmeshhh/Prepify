@@ -585,6 +585,28 @@ a.btn:hover { text-decoration: none; }
 .xp-discussion .score { color: var(--accent); font-size: 12px; flex-shrink: 0; min-width: 44px; padding-top: 2px; }
 .xp-discussion p { font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
+/* cleaned site text */
+.rich { display: flex; flex-direction: column; gap: 8px; }
+.rich p { margin: 0; white-space: normal; overflow-wrap: anywhere; }
+.rich ol, .rich ul { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 4px; }
+.rich li::marker { color: var(--accent); }
+.answer { white-space: normal; }
+.answer .rich { font-size: 14px; }
+.xp-rounds .rich { color: var(--muted); }
+.xp-discussion .rich { flex: 1; }
+
+/* practice links under coding questions */
+.practice { margin: 10px 0 0 44px; font-size: 12px; color: var(--faint); display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.xp-questions .practice { margin-left: 0; }
+.practice a { color: var(--link); }
+
+/* official pages */
+.official-list { display: flex; flex-direction: column; gap: 16px; }
+.official-page { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--radius); padding: 18px 20px; }
+.official-section { margin-top: 16px; }
+.official-section h3 { font-size: 14px; font-weight: 700; color: var(--accent); margin-bottom: 6px; }
+.official-section .rich { font-size: 14px; }
+
 .page-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--border); }
 
 /* ---------- side panel ---------- */
@@ -690,7 +712,7 @@ a.btn:hover { text-decoration: none; }
   .qa-card { padding: 14px; }
   .qa-q { font-size: 14px; gap: 8px; }
   .qnum { min-width: 26px; }
-  .qa-tags, .answer, .more-btn { margin-left: 0; }
+  .qa-tags, .answer, .more-btn, .practice { margin-left: 0; }
   .qa-filter { max-width: none; }
   .switcher { margin-left: 0; width: 100%; }
   .source-hero { padding: 16px; }
