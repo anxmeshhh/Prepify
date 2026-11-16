@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Local data (personal saved questions/reviews)
+data/*.db
+data/*.db-journal
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
