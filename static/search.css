@@ -41,12 +41,6 @@ a:hover { text-decoration: underline; }
 .hidden { display: none !important; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* lowercase UI chrome; names and content keep their own casing */
-.section h2, .btn, .pill, .chip-btn, .panel .kind, .panel .row > span:first-child, .sources-head,
-.sc-stats, .sc-foot, .sc-status, .a-label, .linkbtn, .corner, .guest-tag, .modal-box h2 {
-  text-transform: lowercase;
-}
-.auth .user, .sources-head b, .link-card .sc-stats { text-transform: none; }
 
 /* ---------- shared controls ---------- */
 .wordmark {
@@ -247,8 +241,8 @@ a:hover { text-decoration: underline; }
   align-items: start;
 }
 .understood { color: var(--faint); font-size: 13px; margin-bottom: 20px; }
-.understood b { color: var(--muted); font-weight: 500; margin-right: 14px; }
-.understood .k { color: var(--purple); }
+.understood b { color: var(--text); font-weight: 500; margin-right: 18px; }
+.understood .k { color: var(--purple); margin-right: 6px; }
 
 /* ---------- notices & empty states ---------- */
 .notice, .empty {
@@ -270,7 +264,7 @@ a:hover { text-decoration: underline; }
 .sources-head {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
   flex-wrap: wrap;
   gap: 4px 12px;
   font-size: 13px;
@@ -340,7 +334,7 @@ a:hover { text-decoration: underline; }
 .site-area-head h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.3; }
 .site-area-head h1 .dim { color: var(--muted); font-weight: 500; }
 .site-area-head .sub { color: var(--muted); font-size: 13px; }
-.site-area-head .btn { margin-left: auto; }
+.head-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
 
 .section { margin-bottom: 40px; }
 .section h2 { font-size: 17px; font-weight: 700; margin-bottom: 2px; }
@@ -401,7 +395,7 @@ a:hover { text-decoration: underline; }
   overflow-wrap: anywhere;
 }
 .answer.none { border-left-color: var(--border-strong); color: var(--faint); font-size: 13px; }
-.a-label { font-size: 11px; color: var(--accent); margin-bottom: 4px; letter-spacing: 0.06em; }
+.a-label { font-size: 11px; color: var(--accent); margin-bottom: 4px; letter-spacing: 0.04em; font-weight: 700; }
 .more-btn { margin: 10px 0 0 44px; font-size: 12px; color: var(--accent); }
 .qa-none { color: var(--faint); font-size: 13px; padding: 12px 0; }
 
@@ -431,7 +425,6 @@ a:hover { text-decoration: underline; }
 .xp-card[open] .xp-role::before { transform: rotate(90deg); }
 .xp-when { color: var(--faint); font-size: 12px; }
 .xp-badges { display: flex; flex-wrap: wrap; gap: 6px; }
-.xp-badges .tag { text-transform: lowercase; }
 .xp-preview {
   color: var(--muted);
   font-size: 13px;
@@ -443,7 +436,7 @@ a:hover { text-decoration: underline; }
 .xp-card[open] .xp-preview { display: none; }
 .xp-body { padding: 4px 18px 18px; border-top: 1px solid var(--border); }
 .xp-block { margin-top: 16px; }
-.xp-label { font-size: 11px; color: var(--accent); letter-spacing: 0.08em; text-transform: lowercase; margin-bottom: 6px; }
+.xp-label { font-size: 11px; color: var(--accent); letter-spacing: 0.04em; margin-bottom: 6px; font-weight: 700; }
 .xp-block p { font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .xp-rounds, .xp-questions { padding-left: 22px; display: flex; flex-direction: column; gap: 10px; font-size: 14px; }
 .xp-rounds li::marker, .xp-questions li::marker { color: var(--accent); font-weight: 700; }
@@ -477,6 +470,7 @@ a:hover { text-decoration: underline; }
 .panel .row .ok { color: var(--good); }
 .panel .row .off { color: var(--warn); }
 .panel .btn { width: 100%; margin-top: 16px; }
+.panel .btn + .btn { margin-top: 8px; }
 .panel .linkbtn { display: block; margin-top: 12px; font-size: 12px; }
 .note { color: var(--faint); font-size: 12px; margin-top: 12px; }
 
@@ -524,7 +518,8 @@ a:hover { text-decoration: underline; }
   .topbar-inner { flex-wrap: wrap; gap: 10px 16px; }
   .topbar .searchbar { order: 3; max-width: none; flex-basis: 100%; }
   .panel { grid-template-columns: 1fr; }
-  .site-area-head .btn { margin-left: 0; width: 100%; }
+  .head-actions { margin-left: 0; width: 100%; }
+  .head-actions .btn { flex: 1; }
   .qa-card { padding: 14px; }
   .qa-q { font-size: 14px; gap: 8px; }
   .qnum { min-width: 26px; }

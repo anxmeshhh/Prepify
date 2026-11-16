@@ -14,7 +14,7 @@ function esc(t) {
 function fmtDate(iso) {
   if (!iso) return '';
   const d = new Date(iso);
-  return isNaN(d) ? esc(iso) : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  return isNaN(d) ? String(iso) : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -44,6 +44,31 @@ const GOOGLE = {
 };
 const siteInfo = (name) => SITES[name] || { mark: (name || '?')[0].toUpperCase(), color: 'var(--purple)', host: '', url: null };
 
+// ---------- cleaning what the sites give us ----------
+// Glassdoor glues its button text and labels onto questions:
+// "Why join us?Answer questionQuestion 2Tell me about..." -> ["Why join us?", "Tell me about..."]
+function splitGlued(text) {
+  return String(text || '')
+    .split(/\s*answer question\s*|(?=\bquestion\s*\d+)/i)
+    .map(t => t
+      .replace(/^\s*(question|q)\s*\d+\s*[:.)\-]?\s*/i, '')
+      .replace(/\s*(answer question|\d+\s+answers?|answer)\s*$/i, '')
+      .trim())
+    .filter(t => t.length > 3);
+}
+
+// "Interview" or "Question 1" picked up as a title means the real role wasn't found.
+const cleanRole = (r) => (/^(interview|question\s*\d+|q\s*\d+)$/i.test((r || '').trim()) ? '' : (r || '').trim());
+
+function cleanQuestions(list) {
+  const out = [];
+  (list || []).forEach(q => {
+    const parts = splitGlued(q.text);
+    parts.forEach((text, i) => out.push({ ...q, text, answers: i === 0 ? [...(q.answers || [])] : [] }));
+  });
+  return out;
+}
+
 // ---------- session store (this tab only) ----------
 const STORE_KEY = 'prepify.session.v1';
 function loadStore() {
@@ -59,6 +84,22 @@ function clearStore() {
   try { sessionStorage.removeItem(STORE_KEY); } catch (e) { /* ignore */ }
 }
 
+// Tidy data saved by older versions (glued questions, "Interview" titles) so nothing needs re-pulling.
+function normalizeStore() {
+  Object.values(store.companies).forEach(c => {
+    const merged = [];
+    cleanQuestions(c.questions).forEach(q => {
+      const have = merged.find(m => m.source === q.source && m.text === q.text);
+      if (have) (q.answers || []).forEach(a => { if (!have.answers.includes(a)) have.answers.push(a); });
+      else merged.push(q);
+    });
+    c.questions = merged;
+    (c.experiences || []).forEach(x => { x.role = cleanRole(x.role); x.questions = cleanQuestions(x.questions); });
+  });
+  saveStore();
+}
+normalizeStore();
+
 // Adds what the extension captured; the same question is kept once per site, answers merged.
 function addCapture(payload, fallbackCompany) {
   const name = (payload.company_name || fallbackCompany || '').trim();
@@ -70,9 +111,8 @@ function addCapture(payload, fallbackCompany) {
   const now = new Date().toISOString();
   let added = 0;
 
-  (payload.questions || []).forEach(it => {
-    const text = (it.text || '').trim();
-    if (!text) return;
+  cleanQuestions(payload.questions).forEach(it => {
+    const text = it.text;
     const answers = [].concat(it.answers || []).filter(a => typeof a === 'string' && a.trim()).map(a => a.trim());
     const existing = c.questions.find(q => q.source === src && q.text === text);
     if (existing) {
@@ -94,9 +134,10 @@ function addCapture(payload, fallbackCompany) {
     added += 1;
   });
 
-  (payload.experiences || []).forEach(xp => {
+  (payload.experiences || []).forEach(raw => {
+    const xp = { ...raw, role: cleanRole(raw.role), questions: cleanQuestions(raw.questions) };
     const k = [xp.role, xp.date, (xp.process || xp.application || '').slice(0, 80), (xp.rounds || []).length,
-               (xp.questions || []).map(q => q.text).join('|').slice(0, 120)].join('#');
+               xp.questions.map(q => q.text).join('|').slice(0, 120)].join('#');
     if (c.experiences.some(x => x.source === src && x._k === k)) return;
     c.experiences.push({ ...xp, source: src, url: payload.url, created_at: now, _k: k });
     added += 1;
@@ -123,14 +164,14 @@ async function loadAuth() {
 function renderAuth() {
   $$('[data-auth]').forEach(el => {
     el.innerHTML = auth.user
-      ? `<span class="user" title="${esc(auth.user.email)}">${esc(auth.user.name)}</span><button class="linkbtn" data-signout>sign out</button>`
-      : `<span class="guest-tag">guest</span><button class="btn small" data-signin>sign in</button>`;
+      ? `<span class="user" title="${esc(auth.user.email)}">${esc(auth.user.name)}</span><button class="linkbtn" data-signout>Sign out</button>`
+      : `<span class="guest-tag">Guest</span><button class="btn small" data-signin>Sign in</button>`;
   });
   $$('[data-signin]').forEach(b => b.onclick = openSignin);
   $$('[data-signout]').forEach(b => b.onclick = signOut);
   $('#mode-line').innerHTML = auth.user
-    ? `signed in as <b>${esc(auth.user.name)}</b> · pulled data stays in this tab only and is gone when you close it`
-    : `guest mode: links only · <button class="linkbtn accent" data-signin>sign in with Google</button> to pull questions, answers and reviews into Prepify`;
+    ? `Signed in as <b>${esc(auth.user.name)}</b>. Pulled data stays in this tab only and is gone when you close it.`
+    : `Guest mode shows links only. <button class="linkbtn accent" data-signin>Sign in with Google</button> to pull questions, answers and experiences into Prepify.`;
   $$('#mode-line [data-signin]').forEach(b => b.onclick = openSignin);
 }
 
@@ -191,7 +232,7 @@ function showExtensionNotice() {
   $('#report').insertAdjacentHTML('afterbegin', `
     <div class="notice" id="ext-notice">
       <b>Prepify Capture extension not detected.</b> It reads the sites with your own signed-in Chrome.
-      Load it from <code>chrome://extensions</code> → developer mode → load unpacked → the <code>extension</code> folder,
+      Load it from <code>chrome://extensions</code> → Developer mode → Load unpacked → the <code>extension</code> folder,
       then reload this page.
     </div>`);
 }
@@ -262,7 +303,7 @@ async function runSearch(q, src) {
   document.title = q + ' - Prepify';
   try {
     if (!lastParsed || lastParsed.query !== q) {
-      $('#understood').textContent = 'searching…';
+      $('#understood').textContent = 'Searching…';
       $('#report').innerHTML = '';
       $('#panel').innerHTML = '';
       const known = Object.values(store.companies).map(c => c.name);
@@ -273,7 +314,7 @@ async function runSearch(q, src) {
     window.scrollTo(0, 0);
   } catch (e) {
     $('#understood').textContent = '';
-    $('#report').innerHTML = `<div class="empty"><h3>search failed</h3>${esc(e.message)}</div>`;
+    $('#report').innerHTML = `<div class="empty"><h3>Search failed</h3>${esc(e.message)}</div>`;
   }
 }
 
@@ -285,17 +326,18 @@ function rerender(src = currentSrc()) {
 }
 
 const companyName = (d) => d.company ? d.company.name : d.parsed.company;
+const INTENT_LABEL = { questions: 'Questions', process: 'Process', technical: 'Technical', hr: 'HR', reviews: 'Reviews' };
 
 function understoodLine(p) {
   $('#understood').innerHTML = p.company
-    ? `<span class="k">company:</span> <b>${esc(p.company)}</b> &nbsp; <span class="k">role:</span> <b>${esc(p.role || 'any')}</b> &nbsp; <span class="k">looking for:</span> <b>${esc(p.intents.join(', '))}</b>`
+    ? `<span class="k">Company</span> <b>${esc(p.company)}</b> <span class="k">Role</span> <b>${esc(p.role || 'Any')}</b> <span class="k">Looking for</span> <b>${esc(p.intents.map(i => INTENT_LABEL[i] || i).join(', '))}</b>`
     : '';
 }
 
 function noCompany() {
   $('#panel').innerHTML = '';
-  $('#report').innerHTML = `<div class="empty"><h3>which company do you mean?</h3>
-    try naming it, for example <i>Infosys interview questions</i> or <i>Accenture ASE interview process</i>.</div>`;
+  $('#report').innerHTML = `<div class="empty"><h3>Which company do you mean?</h3>
+    Try naming it, for example <i>Infosys interview questions</i> or <i>Accenture ASE interview process</i>.</div>`;
 }
 
 // ---------- guest view: links only ----------
@@ -306,12 +348,12 @@ function renderGuest(d) {
   const links = [['Glassdoor', SITES.Glassdoor], ['AmbitionBox', SITES.AmbitionBox], ['Google', GOOGLE]];
   $('#report').innerHTML = `
     <div class="notice guest">
-      <b>you're browsing as a guest.</b> Guests get links to the sources only. Sign in with Google to pull
-      questions, answers and reviews from Glassdoor and AmbitionBox straight into Prepify. Pulled data stays
-      in your browser tab and is never stored on a server.
-      <div><button class="btn primary" data-signin>sign in with Google</button></div>
+      <b>You're browsing as a guest.</b> Guests get links to the sources only. Sign in with Google to pull
+      interview experiences, questions and answers from Glassdoor and AmbitionBox straight into Prepify.
+      Pulled data stays in your browser tab and is never stored on a server.
+      <div><button class="btn primary" data-signin>Sign in with Google</button></div>
     </div>
-    <div class="sources-head"><span>sources for <b>${esc(name)}</b></span><span class="hint">opens the site in a new tab</span></div>
+    <div class="sources-head"><span>Sources for <b>${esc(name)}</b></span><span class="hint">Opens the site in a new tab</span></div>
     <div class="source-grid">${links.map(([label, s]) => `
       <a class="source-card link-card" href="${s.url(name)}" target="_blank" rel="noopener noreferrer">
         <div class="sc-head">
@@ -320,18 +362,18 @@ function renderGuest(d) {
           <span class="sc-arrow">↗</span>
         </div>
         <div class="sc-host">${esc(s.host)}</div>
-        <div class="sc-stats muted">${label === 'Google' ? 'web results for interview experiences' : `${esc(name)} on ${esc(label)}`}</div>
-        <div class="sc-foot">open in a new tab</div>
+        <div class="sc-stats muted">${label === 'Google' ? 'Web results for interview experiences' : `${esc(name)} on ${esc(label)}`}</div>
+        <div class="sc-foot">Open in a new tab</div>
       </a>`).join('')}
     </div>`;
   $$('#report [data-signin]').forEach(b => b.onclick = openSignin);
   $('#panel').innerHTML = `
     <div class="panel">
       <h3>${esc(name)}</h3>
-      <div class="kind">company</div>
-      <div class="row"><span>mode</span><span class="off">guest · links only</span></div>
-      <button class="btn" data-signin>sign in to pull sources</button>
-      <p class="note">signed in, Prepify reads Glassdoor and AmbitionBox in the background with your own Chrome and shows everything here</p>
+      <div class="kind">Company</div>
+      <div class="row"><span>Mode</span><span class="off">Guest · links only</span></div>
+      <button class="btn" data-signin>Sign in to pull sources</button>
+      <p class="note">When you're signed in, Prepify reads Glassdoor and AmbitionBox in the background with your own Chrome and shows everything here.</p>
     </div>`;
   $$('#panel [data-signin]').forEach(b => b.onclick = openSignin);
 }
@@ -362,18 +404,22 @@ function groupBySource(d) {
   });
   return [...groups.values()];
 }
+const hasData = (g) => g.questions.length || g.reviews.length || g.experiences.length;
 
-// Subject of a question, from its wording (sites rarely label it). First match wins.
+// Subject of a question, from its wording (sites rarely label it). First match wins,
+// so specific technical subjects come before broad ones like HR.
 const SUBJECTS = [
-  ['SQL & DBMS', /\b(sql|query|queries|join|dbms|database|normali[sz]ation|primary key|foreign key|acid|index(ing)?|rdbms|nosql|mongodb)\b/i],
-  ['OOP', /\b(oops?|object[- ]oriented|inheritance|polymorphism|encapsulation|abstraction|overloading|overriding|constructor|interface|abstract class)\b/i],
-  ['Coding & DSA', /\b(array|string|linked ?list|tree|graph|sort(ing)?|binary search|dynamic programming|recursion|stack|queue|hash ?map|palindrome|fibonacci|prime|reverse|algorithm|complexity|leetcode|program|code|coding|write a (function|program))\b/i],
-  ['OS & Networks', /\b(operating system|os|thread|process(es)?|deadlock|semaphore|paging|virtual memory|network(ing)?|tcp|udp|http|osi|ip address|dns)\b/i],
+  ['SQL & DBMS', /\b(sql|dbms|rdbms|databases?|normali[sz]ation|primary key|foreign key|acid propert|inner join|outer join|left join|right join|sql joins?|stored procedure|indexing|nosql|mongodb|mysql|postgres(ql)?)\b/i],
+  ['OOP', /\b(oops?|object[- ]oriented|inheritance|polymorphism|encapsulation|abstraction|overloading|overriding|abstract class)\b/i],
+  ['System Design', /\b(system design|design (a|an|the) |architecture|scalab|high[- ]level design|low[- ]level design|microservices?|load balanc|distributed system|concurrent users)/i],
+  ['Data & ML', /\b(machine learning|ml model|data science|forecast|regression|classification|neural|deep learning|llm|nlp|statistic|a\/b test)/i],
+  ['Coding & DSA', /\b(array|string|linked ?list|binary tree|tree|graph|sort(ing)?|binary search|dynamic programming|recursion|stack|queue|hash ?map|palindrome|fibonacci|reverse|algorithm|time complexity|leetcode|coding|write a (function|program|code))\b/i],
+  ['OS & Networks', /\b(operating system|multithreading|threads?|deadlock|semaphore|paging|virtual memory|computer networks?|networking|tcp|udp|osi model|ip address|dns)\b/i],
   ['Cloud & DevOps', /\b(cloud|aws|azure|gcp|docker|kubernetes|devops|ci\/?cd|git|jenkins|linux)\b/i],
-  ['Languages & Frameworks', /\b(java|python|c\+\+|javascript|typescript|react|angular|spring|node|\.net|html|css|django|flask)\b/i],
+  ['Languages & Frameworks', /\b(java|python|c\+\+|javascript|typescript|react|angular|spring|node(\.js)?|\.net|html|css|django|flask)\b/i],
   ['Aptitude & Reasoning', /\b(aptitude|puzzle|reasoning|probability|percentage|ratio|time and work|logical)\b/i],
-  ['Projects & Experience', /\b(project|internship|experience|worked on|final year|your role)\b/i],
-  ['HR & Behavioral', /\b(yourself|why|strength|weakness|relocat|shift|salary|ctc|notice period|team|conflict|challenge|goal|five years|hobb|motivat|pressure|join|fit|career)\b/i]
+  ['Projects & Experience', /\b(projects?|internship|product you built|worked on|final year|your role|previous (job|company)|experience)\b/i],
+  ['HR & Behavioral', /\b(yourself|why|strengths?|weakness|relocat|shifts?|salary|ctc|notice period|team|conflict|disagree|challenge|goals?|five years|hobb|motivat|pressure|join|tell me about a time|situation|career|manager)\b/i]
 ];
 function subjectOf(q) {
   if (q.category && q.category !== 'Other') return q.category;
@@ -382,14 +428,14 @@ function subjectOf(q) {
 }
 
 const STATUS_TEXT = {
-  working: 'reading in the background…',
-  login: 'sign in needed · a tab for this site is open in Chrome: sign in there, then click to retry',
-  blocked: 'site asked to verify you\'re human · finish in the open tab, then click to retry',
-  'not-found': 'couldn\'t find an interview page · click to retry',
-  empty: 'page had no questions · click to retry',
-  timeout: 'took too long · click to retry',
-  error: 'couldn\'t read the page · click to retry',
-  cancelled: 'cancelled · click to retry'
+  working: 'Reading in the background…',
+  login: 'Sign-in needed. A tab for this site is open in Chrome: sign in there, then click to retry.',
+  blocked: 'The site asked to verify you\'re human. Finish it in the open tab, then click to retry.',
+  'not-found': 'Couldn\'t find an interview page. Click to retry.',
+  empty: 'The page had no questions. Click to retry.',
+  timeout: 'Took too long. Click to retry.',
+  error: 'Couldn\'t read the page. Click to retry.',
+  cancelled: 'Cancelled. Click to retry.'
 };
 
 let activeSite = null;          // which site's dedicated area is open
@@ -403,23 +449,23 @@ function render(d, src = null) {
   const groups = groupBySource(d);
   renderPanel(name, d);
 
-  const has = (g) => g.questions.length || g.reviews.length || g.experiences.length;
   if (src) activeSite = src;
-  if (!activeSite || !groups.some(g => g.name === activeSite)) activeSite = (groups.find(has) || groups[0]).name;
+  if (!activeSite || !groups.some(g => g.name === activeSite)) activeSite = (groups.find(hasData) || groups[0]).name;
 
-  const withData = groups.filter(has).length;
+  const withData = groups.filter(hasData).length;
+  const anything = d.questions.length || d.reviews.length || d.experiences.length;
   let html = `<div class="sources-head">
-      <span>results from <b>${withData}</b> of ${groups.length} sources</span>
-      <span class="hint">click a box to open that site's results below</span>
+      <span>Results from <b>${withData}</b> of ${groups.length} sources <span class="hint">· Click a box to open that site's results below</span></span>
+      ${anything ? '<button class="btn small" data-pdf>Download PDF</button>' : ''}
     </div>
     <div class="source-grid">${groups.map(g => sourceCard(g, name)).join('')}</div>`;
 
-  if (!d.questions.length && !d.reviews.length && !d.experiences.length) {
+  if (!anything) {
     html += `<div class="empty" style="margin-top:24px;">
-      <h3>nothing pulled for ${esc(name)} yet</h3>
-      click a box to pull that site into Prepify, or pull everything at once. Prepify reads the pages
+      <h3>Nothing pulled for ${esc(name)} yet</h3>
+      Click a box to pull that site into Prepify, or pull everything at once. Prepify reads the pages
       in the background using your own signed-in Chrome, so you stay on this page.
-      <div><button class="btn primary" id="empty-research">pull all sources for ${esc(name)}</button></div>
+      <div><button class="btn primary" id="empty-research">Pull all sources for ${esc(name)}</button></div>
     </div>`;
     $('#report').innerHTML = html;
     $('#empty-research').onclick = () => pullSources(name);
@@ -429,20 +475,20 @@ function render(d, src = null) {
     wireSiteArea(name);
   }
   wireCards(name);
+  wirePdf();
 }
-
-// kept for old ?src= links: the site view is now the dedicated area on the results page
-function renderSource(d, src) { render(d, src); }
 
 function sourceCard(g, company) {
   const s = siteInfo(g.name);
-  const has = g.questions.length || g.reviews.length || g.experiences.length;
+  const has = hasData(g);
   const pull = pulls[pullKey(company, g.name)];
   const busy = pull && pull.status === 'working';
+  const stepText = busy && pull.step && pull.step !== 'starting' ? pull.step.charAt(0).toUpperCase() + pull.step.slice(1) + '…' : null;
   const statusLine = pull && STATUS_TEXT[pull.status]
-    ? `<div class="sc-status ${pull.status}">${busy ? '<span class="spinner"></span>' : ''}${esc(busy && pull.step && pull.step !== 'starting' ? pull.step + '…' : STATUS_TEXT[pull.status])}</div>`
-    : (pull && pull.status === 'done' && !pull.added ? '<div class="sc-status done">up to date</div>' : '');
-  const preview = g.questions[0] ? `<div class="sc-preview">“${esc(g.questions[0].text)}”</div>` : '';
+    ? `<div class="sc-status ${pull.status}">${busy ? '<span class="spinner"></span>' : ''}${esc(stepText || STATUS_TEXT[pull.status])}</div>`
+    : (pull && pull.status === 'done' && !pull.added ? '<div class="sc-status done">Up to date</div>' : '');
+  const firstQ = g.questions[0] || (g.experiences[0] && (g.experiences[0].questions || [])[0]);
+  const preview = firstQ ? `<div class="sc-preview">“${esc(firstQ.text)}”</div>` : '';
   const active = has && g.name === activeSite;
   return `
     <button class="source-card ${has ? '' : 'empty-card'} ${busy ? 'busy' : ''} ${active ? 'active' : ''}" data-src="${esc(g.name)}" type="button">
@@ -461,11 +507,11 @@ function sourceCard(g, company) {
         </div>
         ${preview}
         ${statusLine}
-        <div class="sc-foot">${plural(g.pages.size, 'page')} · pulled ${fmtDate(g.newest)}</div>`
+        <div class="sc-foot">Pulled ${fmtDate(g.newest)} · ${plural(g.pages.size, 'page')}</div>`
       : `
-        <div class="sc-stats muted">nothing pulled yet</div>
+        <div class="sc-stats muted">Nothing pulled yet</div>
         ${statusLine}
-        <div class="sc-foot">${SITES[g.name] && !statusLine ? `click to pull from ${esc(g.name)}` : ''}</div>`}
+        <div class="sc-foot">${SITES[g.name] && !statusLine ? `Click to pull from ${esc(g.name)}` : ''}</div>`}
     </button>`;
 }
 
@@ -497,10 +543,10 @@ function refreshBoxes() {
   wireCards(name);
 }
 
-// The dedicated area for one website: its questions with answers inline, its reviews and pages.
+// The dedicated area for one website: experiences, questions with answers, reviews, source pages.
 function siteArea(g, company, groups) {
   const s = siteInfo(g.name);
-  // the same question on another site gets an "also on" tag
+  // the same question on another site gets an "Also on" tag
   const elsewhere = new Map();
   groups.filter(o => o.name !== g.name).forEach(o =>
     o.questions.forEach(q => elsewhere.set(norm(q.text), o.name)));
@@ -523,35 +569,38 @@ function siteArea(g, company, groups) {
         <h1>${esc(g.name)} <span class="dim">· ${esc(company)}</span></h1>
         <div class="sub">${plural(g.experiences.length, 'experience')} · ${plural(g.questions.length, 'question')} · ${plural(g.answers, 'answer')} · ${plural(g.reviews.length, 'review')}</div>
       </div>
-      ${SITES[g.name] ? `<button class="btn" id="refresh-src" data-src="${esc(g.name)}">pull again</button>` : ''}
+      <div class="head-actions">
+        <button class="btn" data-pdf>Download PDF</button>
+        ${SITES[g.name] ? `<button class="btn" id="refresh-src" data-src="${esc(g.name)}">Pull again</button>` : ''}
+      </div>
     </div>`;
 
   if (g.experiences.length) {
-    html += sec('interview experiences', `what candidates went through, as written on ${esc(g.name)} · newest first`,
+    html += sec('Interview experiences', `What candidates went through, as written on ${esc(g.name)}. Newest first.`,
       `<div class="xp-list">${[...g.experiences].sort(byDateDesc).map((x, i) => xpCard(x, i)).join('')}</div>`);
   }
 
   if (qs.length) {
     const chips = Object.entries(subjects).sort((a, b) => b[1] - a[1]);
-    html += sec('interview questions and answers', `as shown on ${esc(g.name)} · grouped by subject`,
+    html += sec('Interview questions and answers', `As shown on ${esc(g.name)}, grouped by subject.`,
       `<div class="qa-tools">
          <div class="chips">
-           <button class="chip-btn active" data-subject="">all <span>${qs.length}</span></button>
+           <button class="chip-btn active" data-subject="">All <span>${qs.length}</span></button>
            ${chips.map(([c, k]) => `<button class="chip-btn" data-subject="${esc(c)}">${esc(c)} <span>${k}</span></button>`).join('')}
          </div>
-         <input class="qa-filter" id="qa-filter" placeholder="filter questions…" aria-label="Filter questions" />
+         <input class="qa-filter" id="qa-filter" placeholder="Filter questions…" aria-label="Filter questions" />
        </div>
        <div class="qa-list">
          ${qs.map((q, i) => qaCard(q, i, g.name, elsewhere.get(norm(q.text)))).join('')}
        </div>
-       <p class="qa-none hidden" id="qa-none">no questions match</p>`);
+       <p class="qa-none hidden" id="qa-none">No questions match.</p>`);
   }
 
   if (g.reviews.length) {
-    html += sec('reviews', `from ${esc(g.name)}`, g.reviews.map(r => reviewHtml(r)).join(''));
+    html += sec('Reviews', `From ${esc(g.name)}.`, g.reviews.map(r => reviewHtml(r)).join(''));
   }
 
-  html += sec('source pages', 'every item above came from one of these pages',
+  html += sec('Source pages', 'Every item above came from one of these pages.',
     [...g.pages.values()].map(pg => `
       <div class="result">
         <div class="title"><a href="${esc(pg.url)}" target="_blank" rel="noopener noreferrer">${esc(pg.url)}</a></div>
@@ -566,9 +615,10 @@ function xpTime(x) {
   return isNaN(t) ? 0 : t;
 }
 const byDateDesc = (a, b) => xpTime(b) - xpTime(a);
+const sentence = (t) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
 
 function badge(text, kind) {
-  return text ? `<span class="tag ${kind || ''}">${esc(text)}</span>` : '';
+  return text ? `<span class="tag ${kind || ''}">${esc(sentence(text))}</span>` : '';
 }
 function outcomeKind(t) {
   return /accepted|selected|got offer|^offer/i.test(t || '') ? 'good' : /no offer|rejected|declined/i.test(t || '') ? 'bad' : '';
@@ -584,13 +634,14 @@ function xpCard(x, i) {
     ? `<ol class="xp-rounds">${x.rounds.map(r => `<li><b>${esc(r.name)}</b>${r.detail ? `<span>${esc(r.detail)}</span>` : ''}</li>`).join('')}</ol>` : '';
   const qs = (x.questions || []).length
     ? `<ol class="xp-questions">${x.questions.map(q => `<li><span>${esc(q.text)}</span>${(q.answers || []).map((a, j) =>
-        `<div class="answer"><div class="a-label">answer${q.answers.length > 1 ? ' ' + (j + 1) : ''}</div>${esc(a)}</div>`).join('')}</li>`).join('')}</ol>` : '';
+        `<div class="answer"><div class="a-label">Answer${q.answers.length > 1 ? ' ' + (j + 1) : ''}</div>${esc(a)}</div>`).join('')}</li>`).join('')}</ol>` : '';
   const preview = x.process || x.application || (x.rounds && x.rounds[0] && `${x.rounds[0].name}: ${x.rounds[0].detail}`) || '';
+  const title = cleanRole(x.role) || `Interview experience ${i + 1}`;
   return `
     <details class="xp-card" ${i === 0 ? 'open' : ''}>
       <summary>
         <div class="xp-head">
-          <span class="xp-role">${esc(x.role || 'Interview')}</span>
+          <span class="xp-role">${esc(title)}</span>
           <span class="xp-when">${esc([x.date, x.location].filter(Boolean).join(' · '))}</span>
         </div>
         <div class="xp-badges">
@@ -600,12 +651,12 @@ function xpCard(x, i) {
         ${preview ? `<div class="xp-preview">${esc(preview)}</div>` : ''}
       </summary>
       <div class="xp-body">
-        ${block('how they applied', para(x.application))}
-        ${block('interview process', para(x.process))}
-        ${block('rounds', rounds)}
-        ${block('questions asked', qs)}
-        ${block('tips', para(x.tips))}
-        ${x.url ? `<div class="meta">pulled ${fmtDate(x.created_at)} · <a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">source page</a></div>` : ''}
+        ${block('How they applied', para(x.application))}
+        ${block('Interview process', para(x.process))}
+        ${block('Rounds', rounds)}
+        ${block('Questions asked', qs)}
+        ${block('Tips', para(x.tips))}
+        ${x.url ? `<div class="meta">Pulled ${fmtDate(x.created_at)} · <a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">Source page</a></div>` : ''}
       </div>
     </details>`;
 }
@@ -621,29 +672,30 @@ function qaCard(q, i, site, alsoOn) {
         <span class="tag">${esc(q.subject)}</span>
         ${q.round_type ? `<span class="tag">${esc(q.round_type)}</span>` : ''}
         ${q.difficulty ? `<span class="tag">${esc(q.difficulty)}</span>` : ''}
-        ${alsoOn ? `<span class="tag good">also on ${esc(alsoOn)}</span>` : ''}
+        ${alsoOn ? `<span class="tag good">Also on ${esc(alsoOn)}</span>` : ''}
       </div>
       ${first
-        ? `<div class="answer"><div class="a-label">answer${answers.length > 1 ? ' 1' : ''}</div>${esc(first)}</div>
+        ? `<div class="answer"><div class="a-label">Answer${answers.length > 1 ? ' 1' : ''}</div>${esc(first)}</div>
            ${rest.length ? `
              <div class="more-answers hidden">${rest.map((a, j) =>
-               `<div class="answer"><div class="a-label">answer ${j + 2}</div>${esc(a)}</div>`).join('')}</div>
-             <button class="linkbtn more-btn">show ${plural(rest.length, 'more answer')}</button>` : ''}`
-        : `<div class="answer none">no answer shown on ${esc(site)}</div>`}
+               `<div class="answer"><div class="a-label">Answer ${j + 2}</div>${esc(a)}</div>`).join('')}</div>
+             <button class="linkbtn more-btn">Show ${plural(rest.length, 'more answer')}</button>` : ''}`
+        : `<div class="answer none">No answer shown on ${esc(site)}</div>`}
     </article>`;
 }
 
 function wireSiteArea(company) {
   const rb = $('#refresh-src');
-  if (rb) rb.onclick = () => { pullSources(company, [rb.dataset.src]); rb.textContent = 'pulling…'; rb.disabled = true; };
+  if (rb) rb.onclick = () => { pullSources(company, [rb.dataset.src]); rb.textContent = 'Pulling…'; rb.disabled = true; };
 
-  $$('.more-btn').forEach(b => b.onclick = () => {
-    const box = b.previousElementSibling;
-    const open = box.classList.toggle('hidden') === false;
-    b.textContent = open ? 'hide answers' : b.dataset.label || b.textContent;
-    if (open) b.dataset.label = b.dataset.label || b.textContent;
+  $$('.more-btn').forEach(b => {
+    b.dataset.label = b.textContent;
+    b.onclick = () => {
+      const box = b.previousElementSibling;
+      const open = box.classList.toggle('hidden') === false;
+      b.textContent = open ? 'Hide answers' : b.dataset.label;
+    };
   });
-  $$('.more-btn').forEach(b => { b.dataset.label = b.textContent; });
 
   let subject = '';
   const apply = () => {
@@ -670,10 +722,10 @@ function reviewHtml(r) {
   return `
     <div class="result">
       <div class="title">${esc(r.title || r.job_title || 'Review')}${r.rating ? ` · ${r.rating}/5` : ''}</div>
-      ${r.pros ? `<div class="pros"><b>pros</b>${esc(r.pros)}</div>` : ''}
-      ${r.cons ? `<div class="cons"><b>cons</b>${esc(r.cons)}</div>` : ''}
+      ${r.pros ? `<div class="pros"><b>Pros</b>${esc(r.pros)}</div>` : ''}
+      ${r.cons ? `<div class="cons"><b>Cons</b>${esc(r.cons)}</div>` : ''}
       ${r.body ? `<div class="pros">${esc(r.body)}</div>` : ''}
-      <div class="meta">${r.job_title ? esc(r.job_title) + ' · ' : ''}${r.review_date ? esc(r.review_date) + ' · ' : ''}pulled ${fmtDate(r.created_at)}</div>
+      <div class="meta">${r.job_title ? esc(r.job_title) + ' · ' : ''}${r.review_date ? esc(r.review_date) + ' · ' : ''}Pulled ${fmtDate(r.created_at)}</div>
     </div>`;
 }
 
@@ -682,21 +734,171 @@ function renderPanel(name, d) {
   const ratings = d.reviews.map(r => r.rating).filter(Boolean);
   const avg = ratings.length ? (ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(1) + ' / 5' : '–';
   const unique = new Set(d.questions.map(q => norm(q.text))).size;
+  const anything = d.questions.length || d.reviews.length || d.experiences.length;
   $('#panel').innerHTML = `
     <div class="panel">
       <h3>${esc(name)}</h3>
-      <div class="kind">company</div>
-      <div class="row"><span>experiences</span><span>${(d.experiences || []).length}</span></div>
-      <div class="row"><span>questions</span><span>${unique}</span></div>
-      <div class="row"><span>reviews</span><span>${d.reviews.length}</span></div>
-      <div class="row"><span>avg rating</span><span>${avg}</span></div>
-      <div class="row"><span>extension</span><span class="${hasExtension() ? 'ok' : 'off'}">${hasExtension() ? 'connected' : 'not detected'}</span></div>
-      <button class="btn" id="panel-research">pull all sources</button>
-      <button class="linkbtn" id="panel-clear">clear this session's data</button>
-      <p class="note">pulled data lives only in this browser tab · closing the tab or signing out erases it</p>
+      <div class="kind">Company</div>
+      <div class="row"><span>Experiences</span><span>${(d.experiences || []).length}</span></div>
+      <div class="row"><span>Questions</span><span>${unique}</span></div>
+      <div class="row"><span>Reviews</span><span>${d.reviews.length}</span></div>
+      <div class="row"><span>Average rating</span><span>${avg}</span></div>
+      <div class="row"><span>Extension</span><span class="${hasExtension() ? 'ok' : 'off'}">${hasExtension() ? 'Connected' : 'Not detected'}</span></div>
+      <button class="btn" id="panel-research">Pull all sources</button>
+      ${anything ? '<button class="btn primary" data-pdf>Download PDF</button>' : ''}
+      <button class="linkbtn" id="panel-clear">Clear this session's data</button>
+      <p class="note">Pulled data lives only in this browser tab. Closing the tab or signing out erases it.</p>
     </div>`;
   $('#panel-research').onclick = () => pullSources(name);
   $('#panel-clear').onclick = () => { clearStore(); Object.keys(pulls).forEach(k => delete pulls[k]); rerender(); };
+}
+
+// ---------- PDF export (built in the browser; nothing is uploaded) ----------
+const JSPDF_URL = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+function loadJsPdf() {
+  if (window.jspdf) return Promise.resolve(window.jspdf.jsPDF);
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = JSPDF_URL;
+    s.onload = () => resolve(window.jspdf.jsPDF);
+    s.onerror = () => reject(new Error('Could not load the PDF library (are you offline?)'));
+    document.head.appendChild(s);
+  });
+}
+
+// jsPDF's built-in fonts cover Latin-1 only: swap smart punctuation, drop the rest.
+const pdfText = (t) => String(t || '')
+  .replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, '-')
+  .replace(/…/g, '...').replace(/•/g, '-').replace(/[→↗]/g, '->')
+  .replace(/[^\x09\x0A\x0D\x20-\x7E\xA0-\xFF]/g, '');
+
+function wirePdf() {
+  $$('[data-pdf]').forEach(b => b.onclick = async () => {
+    const label = b.textContent;
+    b.disabled = true; b.textContent = 'Preparing PDF…';
+    try { await downloadPdf(lastData); }
+    catch (e) { alertInline(e.message); }
+    finally { b.disabled = false; b.textContent = label; }
+  });
+}
+
+function alertInline(msg) {
+  const old = $('#pdf-error');
+  if (old) old.remove();
+  $('#report').insertAdjacentHTML('afterbegin', `<div class="notice" id="pdf-error"><b>PDF not created.</b> ${esc(msg)}</div>`);
+}
+
+async function downloadPdf(d) {
+  const JsPDF = await loadJsPdf();
+  const doc = new JsPDF({ unit: 'pt', format: 'a4' });
+  const W = doc.internal.pageSize.getWidth();
+  const H = doc.internal.pageSize.getHeight();
+  const M = 50;
+  let y = M;
+
+  const ensure = (h) => { if (y + h > H - M) { doc.addPage(); y = M; } };
+  const write = (text, o = {}) => {
+    const size = o.size || 10;
+    doc.setFont('helvetica', o.bold ? 'bold' : (o.italic ? 'italic' : 'normal'));
+    doc.setFontSize(size);
+    doc.setTextColor(...(o.color || [30, 30, 30]));
+    const lines = doc.splitTextToSize(pdfText(text), W - 2 * M - (o.indent || 0));
+    lines.forEach(line => {
+      ensure(size * 1.4);
+      doc.text(line, M + (o.indent || 0), y + size);
+      y += size * 1.4;
+    });
+    y += o.after === undefined ? 4 : o.after;
+  };
+  const rule = (color = [220, 220, 220]) => { ensure(10); doc.setDrawColor(...color); doc.line(M, y, W - M, y); y += 10; };
+
+  const name = companyName(d);
+  const groups = groupBySource(d).filter(hasData);
+  const muted = [110, 110, 110];
+  const accent = [196, 110, 50];
+
+  write(`${name}: interview preparation`, { size: 20, bold: true, after: 6 });
+  write(`Prepared with Prepify on ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}` +
+        ` for "${d.query}"`, { size: 9, color: muted, after: 2 });
+  write('Sources: ' + groups.map(g => `${g.name} (${plural(g.experiences.length, 'experience')}, ${plural(g.questions.length, 'question')})`).join(', '),
+        { size: 9, color: muted, after: 14 });
+  rule();
+
+  groups.forEach((g, gi) => {
+    if (gi > 0) { y += 10; }
+    write(g.name, { size: 16, bold: true, color: accent, after: 8 });
+
+    if (g.experiences.length) {
+      write('Interview experiences', { size: 13, bold: true, after: 6 });
+      [...g.experiences].sort(byDateDesc).forEach((x, i) => {
+        ensure(40);
+        const title = cleanRole(x.role) || `Interview experience ${i + 1}`;
+        write(`${i + 1}. ${title}${x.date ? '  -  ' + x.date : ''}${x.location ? ', ' + x.location : ''}`, { size: 11, bold: true, after: 2 });
+        const facts = [x.outcome, x.experience, x.difficulty].filter(Boolean).map(sentence).join(' | ');
+        if (facts) write(facts, { size: 9, color: muted, indent: 14, after: 4 });
+        if (x.application) write('How they applied: ' + x.application, { indent: 14 });
+        if (x.process) write('Interview process: ' + x.process, { indent: 14 });
+        (x.rounds || []).forEach(r => write(`${r.name}${r.detail ? ': ' + r.detail : ''}`, { indent: 14 }));
+        if ((x.questions || []).length) {
+          write('Questions asked:', { bold: true, indent: 14, after: 2 });
+          x.questions.forEach((q, qi) => {
+            write(`${qi + 1}. ${q.text}`, { indent: 24, after: 2 });
+            (q.answers || []).forEach(a => write('Answer: ' + a, { indent: 36, color: muted, after: 2 }));
+          });
+          y += 2;
+        }
+        if (x.tips) write('Tips: ' + x.tips, { indent: 14 });
+        y += 6;
+      });
+    }
+
+    if (g.questions.length) {
+      ensure(40);
+      write('Interview questions and answers', { size: 13, bold: true, after: 6 });
+      const bySubject = {};
+      g.questions.forEach(q => { const s = subjectOf(q); (bySubject[s] = bySubject[s] || []).push(q); });
+      let num = 0;
+      Object.entries(bySubject).sort((a, b) => b[1].length - a[1].length).forEach(([subject, list]) => {
+        ensure(30);
+        write(`${subject} (${list.length})`, { size: 11, bold: true, color: accent, after: 4 });
+        list.forEach(q => {
+          num += 1;
+          write(`Q${num}. ${q.text}`, { bold: true, indent: 10, after: 2 });
+          const answers = q.answers || [];
+          if (answers.length) answers.forEach((a, ai) => write(`Answer${answers.length > 1 ? ' ' + (ai + 1) : ''}: ${a}`, { indent: 26, color: muted, after: 3 }));
+          else write(`No answer shown on ${g.name}.`, { indent: 26, color: [160, 160, 160], italic: true, after: 3 });
+          y += 3;
+        });
+      });
+    }
+
+    if (g.reviews.length) {
+      ensure(40);
+      write('Reviews', { size: 13, bold: true, after: 6 });
+      g.reviews.forEach(r => {
+        write(`${r.title || r.job_title || 'Review'}${r.rating ? ' (' + r.rating + '/5)' : ''}`, { bold: true, after: 2 });
+        if (r.pros) write('Pros: ' + r.pros, { indent: 14, after: 2 });
+        if (r.cons) write('Cons: ' + r.cons, { indent: 14, after: 2 });
+        y += 4;
+      });
+    }
+
+    write('Source pages: ' + [...g.pages.keys()].join(', '), { size: 8, color: muted, after: 8 });
+    rule();
+  });
+
+  const pages = doc.getNumberOfPages();
+  for (let i = 1; i <= pages; i++) {
+    doc.setPage(i);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(150, 150, 150);
+    doc.text(pdfText(`${name} - interview preparation`), M, H - 24);
+    doc.text(`Page ${i} of ${pages}`, W - M, H - 24, { align: 'right' });
+  }
+
+  const file = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'company';
+  doc.save(`${file}-interview-preparation.pdf`);
 }
 
 // ---------- wiring ----------
@@ -713,7 +915,7 @@ $('#home-research').onclick = async () => {
   if (signedIn() && lastData && lastData.parsed.company) pullSources(companyName(lastData));
 };
 
-// "/" focuses the search box, like a terminal command palette
+// "/" focuses the search box
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') $('#signin-modal').classList.add('hidden');
   if (e.key !== '/' || ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
