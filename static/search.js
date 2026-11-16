@@ -383,7 +383,7 @@ function subjectOf(q) {
 
 const STATUS_TEXT = {
   working: 'reading in the background…',
-  login: 'sign in needed · finish in the open tab, then click to retry',
+  login: 'sign in needed · a tab for this site is open in Chrome: sign in there, then click to retry',
   blocked: 'site asked to verify you\'re human · finish in the open tab, then click to retry',
   'not-found': 'couldn\'t find an interview page · click to retry',
   empty: 'page had no questions · click to retry',

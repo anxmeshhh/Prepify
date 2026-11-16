@@ -316,7 +316,11 @@
     if (/\/(profile\/login|member\/|login|signin)/i.test(location.pathname)) return true;
     const dialogs = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [class*="modal" i]')]
       .filter(d => d.offsetParent !== null || getComputedStyle(d).position === 'fixed');
-    return dialogs.some(d => /sign in|log in|continue with google|create (a free )?account|sign up/i.test(d.innerText || ''));
+    if (dialogs.some(d => /sign in|log in|continue with google|create (a free )?account|sign up/i.test(d.innerText || ''))) return true;
+    // Glassdoor's wall is a bottom sheet, not a dialog: "Continue with Google" / "Continue with Apple or email".
+    // Only called once a page has yielded nothing, so this text alone is enough.
+    const t = document.body ? document.body.innerText : '';
+    return /continue with apple or email|continue with google|sign in to (see|read|continue|unlock)|join (now )?to (see|unlock|continue)/i.test(t);
   }
 
   const pageDetail = () => `${document.title.slice(0, 80)} (${location.pathname})`;
