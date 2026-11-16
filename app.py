@@ -12,6 +12,12 @@ import secrets
 
 from flask import Flask, jsonify, render_template, request, session
 
+try:  # settings from .env (GOOGLE_CLIENT_ID, PREPIFY_SECRET); real environment variables win
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
+except ImportError:
+    pass
+
 app = Flask(__name__, static_folder='static', template_folder='templates')
 
 # Sessions are signed cookies, not server storage. Without PREPIFY_SECRET a fresh key is made

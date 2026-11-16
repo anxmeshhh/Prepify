@@ -35,13 +35,7 @@ Open http://localhost:5000.
 
 1. In Google Cloud Console, go to **APIs & Services → Credentials → Create credentials → OAuth client ID** and choose **Web application**.
 2. Add `http://localhost:5000` as an authorised JavaScript origin.
-3. Start Prepify with the client ID. Optionally set a fixed `PREPIFY_SECRET` so sessions survive restarts.
-
-```bash
-GOOGLE_CLIENT_ID=xxxxxxxx.apps.googleusercontent.com python app.py
-```
-
-PowerShell: `$env:GOOGLE_CLIENT_ID="xxxxxxxx.apps.googleusercontent.com"; python app.py`
+3. Copy `.env.example` to `.env` and fill in `GOOGLE_CLIENT_ID`, plus any long random `PREPIFY_SECRET` so sign-ins survive restarts. `.env` is git-ignored, and no client secret is needed. Then run `python app.py`.
 
 ### Load the extension (needed for pulling)
 
