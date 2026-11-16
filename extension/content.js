@@ -517,6 +517,9 @@
     await settle();
 
     const fail = (status) => send({ type: 'research:result', status, url: location.href, detail: pageDetail() });
+    // Automatic checks ("Just a moment...") usually finish by themselves in a real browser within
+    // seconds; give the site's own check time before asking the user. Nothing here bypasses it.
+    for (let i = 0; i < 10 && looksBlocked(); i++) await sleep(2000);
     if (looksBlocked()) return fail('blocked');
 
     // Reddit (old.reddit.com, plain HTML): queue the best threads from search, then read each one

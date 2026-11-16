@@ -569,8 +569,11 @@ function sourceCard(g, company) {
   const pull = pulls[pullKey(company, g.name)];
   const busy = pull && pull.status === 'working';
   const stepText = busy && pull.step && pull.step !== 'starting' ? pull.step.charAt(0).toUpperCase() + pull.step.slice(1) + '…' : null;
+  // "nothing found" is a normal outcome, not an error: say so plainly
+  const noneText = (pull && (pull.status === 'not-found' || pull.status === 'empty'))
+    ? `No interview results on ${g.name} for ${company}. Click to try again.` : null;
   const statusLine = pull && STATUS_TEXT[pull.status]
-    ? `<div class="sc-status ${pull.status}">${busy ? '<span class="spinner"></span>' : ''}${esc(stepText || STATUS_TEXT[pull.status])}</div>`
+    ? `<div class="sc-status ${noneText ? 'none' : pull.status}">${busy ? '<span class="spinner"></span>' : ''}${esc(stepText || noneText || STATUS_TEXT[pull.status])}</div>`
     : (pull && pull.status === 'done' && !pull.added ? '<div class="sc-status done">Up to date</div>' : '');
   const detailLine = pull && pull.detail && !busy && pull.status !== 'done'
     ? `<div class="sc-detail" title="${esc(pull.detail)}">Stopped at: ${esc(pull.detail)}</div>` : '';
