@@ -155,7 +155,8 @@ def current_user():
 
 @app.route('/api/auth/config', methods=['GET'])
 def auth_config():
-    return jsonify({'google_client_id': GOOGLE_CLIENT_ID or None, 'user': current_user()})
+    return jsonify({'google_client_id': GOOGLE_CLIENT_ID or None, 'user': current_user(),
+                    'sources': {'reddit_api': bool(REDDIT_CLIENT_ID)}})
 
 
 @app.route('/api/auth/google', methods=['POST'])
@@ -184,6 +185,87 @@ def auth_google():
 def auth_logout():
     session.clear()
     return jsonify({'ok': True})
+
+
+# ---------- Reddit (official Data API, application-only OAuth) ----------
+# An "installed app" client ID from https://www.reddit.com/prefs/apps is enough: no user login,
+# no secret. Results go straight back to the browser; only the short-lived access token is kept
+# in memory. Personal, non-commercial use within Reddit's free API limits.
+REDDIT_CLIENT_ID = os.environ.get('REDDIT_CLIENT_ID', '').strip()
+REDDIT_UA = 'web:prepify:0.5 (personal interview preparation)'
+_reddit_token = {'value': None, 'expires': 0.0}
+
+
+def reddit_token():
+    import time
+    import requests
+    if _reddit_token['value'] and time.time() < _reddit_token['expires'] - 60:
+        return _reddit_token['value']
+    r = requests.post('https://www.reddit.com/api/v1/access_token',
+                      auth=(REDDIT_CLIENT_ID, ''),
+                      data={'grant_type': 'https://oauth.reddit.com/grants/installed_client',
+                            'device_id': 'DO_NOT_TRACK_THIS_DEVICE'},
+                      headers={'User-Agent': REDDIT_UA}, timeout=15)
+    r.raise_for_status()
+    body = r.json()
+    _reddit_token.update(value=body['access_token'], expires=time.time() + body.get('expires_in', 3600))
+    return _reddit_token['value']
+
+
+INTERVIEW_WORDS = re.compile(r'interview|hiring|offer|round|placement|recruit|selected|rejected|onsite|\boa\b|assessment', re.I)
+
+
+@app.route('/api/sources/reddit', methods=['GET'])
+def reddit_source():
+    if not current_user():
+        return jsonify({'error': 'sign in to pull sources'}), 401
+    if not REDDIT_CLIENT_ID:
+        return jsonify({'error': 'Reddit is not set up (REDDIT_CLIENT_ID missing)'}), 503
+    company = (request.args.get('company') or '').strip()[:100]
+    if not company:
+        return jsonify({'error': 'company required'}), 400
+    import requests
+    from datetime import datetime, timezone
+    try:
+        headers = {'Authorization': 'Bearer ' + reddit_token(), 'User-Agent': REDDIT_UA}
+        r = requests.get('https://oauth.reddit.com/search',
+                         params={'q': f'{company} interview', 'sort': 'relevance', 't': 'all',
+                                 'limit': 25, 'type': 'link', 'raw_json': 1},
+                         headers=headers, timeout=15)
+        r.raise_for_status()
+        word = company.lower().split()[0]
+        posts = [c['data'] for c in r.json().get('data', {}).get('children', [])]
+        posts = [p for p in posts if not p.get('over_18')
+                 and word in (p.get('title', '') + ' ' + p.get('selftext', '')).lower()
+                 and INTERVIEW_WORDS.search(p.get('title', '') + ' ' + p.get('selftext', ''))][:6]
+
+        payload = {'source': 'Reddit', 'url': 'https://www.reddit.com/search/?q=' + requests.utils.quote(f'{company} interview'),
+                   'company_name': company, 'questions': [], 'reviews': [], 'experiences': []}
+        for p in posts:
+            discussion = []
+            try:
+                t = requests.get(f"https://oauth.reddit.com/comments/{p['id']}",
+                                 params={'limit': 50, 'depth': 1, 'sort': 'top', 'raw_json': 1},
+                                 headers=headers, timeout=15).json()
+                comments = [c['data'] for c in t[1]['data']['children'] if c.get('kind') == 't1']
+                comments = [c for c in comments if c.get('body') and c['body'] not in ('[deleted]', '[removed]')]
+                comments.sort(key=lambda c: c.get('score', 0), reverse=True)
+                discussion = [{'text': c['body'][:1500], 'score': c.get('score', 0)} for c in comments[:8]]
+            except Exception:
+                pass
+            body = (p.get('selftext') or '')[:4000]
+            questions = [{'text': q.strip(), 'answers': []} for q in re.findall(r'[^.!?\n]{12,300}\?', body)][:15]
+            payload['experiences'].append({
+                'role': p.get('title', ''), 'location': 'r/' + p.get('subreddit', ''),
+                'date': datetime.fromtimestamp(p.get('created_utc', 0), tz=timezone.utc).strftime('%Y-%m-%d'),
+                'outcome': '', 'experience': '', 'difficulty': '', 'application': '', 'process': body,
+                'rounds': [], 'questions': questions, 'tips': '', 'discussion': discussion,
+                'score': p.get('score', 0), 'comments': p.get('num_comments', 0),
+                'url': 'https://www.reddit.com' + p.get('permalink', '')})
+            payload['questions'] += [{**q, 'role': p.get('title', '')} for q in questions]
+        return jsonify(payload)
+    except Exception as e:
+        return jsonify({'error': f'Reddit request failed: {type(e).__name__}'}), 502
 
 
 # ---------- Pages ----------

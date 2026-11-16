@@ -45,6 +45,28 @@ Open http://localhost:5000.
 
 When you click a source box, the extension opens that site in a background tab and finds the company's interview page. It opens at most three pages per site, with no pagination or crawling. It reads the questions, answers and reviews, hands them to your Prepify tab and closes the background tab. You can also click **Save to Prepify** on any page you're viewing, or right-click selected text.
 
+## Sources
+
+| Source | How Prepify reads it | What you get |
+| --- | --- | --- |
+| Glassdoor | Extension, in your own signed-in Chrome | Interview experiences, questions, answers |
+| AmbitionBox | Extension | Experiences with rounds, questions, answers, tips |
+| Indeed | Extension (same login as Glassdoor) | Interview experiences and questions |
+| GeeksforGeeks | Extension: searches "<company> interview experience" and reads up to 4 articles | Round-by-round write-ups, questions, tips |
+| Reddit | Official Reddit API on the Prepify server when `REDDIT_CLIENT_ID` is set, otherwise through the extension | Threads with the original post and top comments |
+| LinkedIn | Links only | LinkedIn doesn't allow automated reading, so Prepify only links to posts |
+
+### Enable Reddit (official API)
+
+1. Go to https://www.reddit.com/prefs/apps, click **create another app** and choose **installed app**. Use `http://localhost:5000` as the redirect URI; it isn't used.
+2. Copy the client ID, the short string under the app name, into `.env` as `REDDIT_CLIENT_ID=...`, then restart Prepify. No secret and no Reddit login are needed. Results go straight to your browser and the server stores nothing.
+
+## Using results
+
+- **Dashboard:** one box per source. Click a filled box to open that source's own page, or an empty box to pull it.
+- **Source page:** tabs for *Experiences*, *Questions & answers*, *Discussions*, *Reviews* and *Source pages*, with filters by outcome or subject, a switcher between sources and **Back to results**. Browser back and forward work too.
+- **Download PDF:** all sources from the dashboard, or one source from its page. The PDF is built in your browser.
+
 ## Project layout
 
 | Path | What it is |

@@ -28,6 +28,7 @@ async function getJson(url, opts = {}) {
 }
 
 // ---------- sources ----------
+// linkOnly: Prepify never reads that site automatically (LinkedIn bans automated access); it only links.
 const SITES = {
   Glassdoor: {
     mark: 'G', color: 'var(--good)', host: 'glassdoor.co.in',
@@ -36,8 +37,25 @@ const SITES = {
   AmbitionBox: {
     mark: 'A', color: 'var(--link)', host: 'ambitionbox.com',
     url: (n) => `https://www.ambitionbox.com/search?q=${encodeURIComponent(n)}`
+  },
+  Indeed: {
+    mark: 'I', color: 'var(--purple)', host: 'in.indeed.com',
+    url: (n) => `https://in.indeed.com/companies/search?q=${encodeURIComponent(n)}`
+  },
+  GeeksforGeeks: {
+    mark: 'Gf', color: '#2f8d46', host: 'geeksforgeeks.org',
+    url: (n) => `https://www.geeksforgeeks.org/search/?gq=${encodeURIComponent(n + ' interview experience')}`
+  },
+  Reddit: {
+    mark: 'R', color: 'var(--error)', host: 'reddit.com',
+    url: (n) => `https://www.reddit.com/search/?q=${encodeURIComponent(n + ' interview')}`
+  },
+  LinkedIn: {
+    mark: 'in', color: '#4a90d9', host: 'linkedin.com', linkOnly: true,
+    url: (n) => `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(n + ' interview experience')}`
   }
 };
+const PULLABLE = Object.keys(SITES).filter(k => !SITES[k].linkOnly);
 const GOOGLE = {
   mark: 'g', color: 'var(--purple)', host: 'google.com',
   url: (n) => `https://www.google.com/search?q=${encodeURIComponent(n + ' interview questions experience')}`
@@ -139,7 +157,7 @@ function addCapture(payload, fallbackCompany) {
     const k = [xp.role, xp.date, (xp.process || xp.application || '').slice(0, 80), (xp.rounds || []).length,
                xp.questions.map(q => q.text).join('|').slice(0, 120)].join('#');
     if (c.experiences.some(x => x.source === src && x._k === k)) return;
-    c.experiences.push({ ...xp, source: src, url: payload.url, created_at: now, _k: k });
+    c.experiences.push({ ...xp, source: src, url: xp.url || payload.url, created_at: now, _k: k });
     added += 1;
   });
 
@@ -148,7 +166,7 @@ function addCapture(payload, fallbackCompany) {
 }
 
 // ---------- auth (optional Google sign-in) ----------
-const auth = { clientId: null, user: null, ready: false };
+const auth = { clientId: null, user: null, ready: false, sources: {} };
 const signedIn = () => !!auth.user;
 
 async function loadAuth() {
@@ -156,6 +174,7 @@ async function loadAuth() {
     const r = await getJson('/api/auth/config');
     auth.clientId = r.google_client_id;
     auth.user = r.user;
+    auth.sources = r.sources || {};
   } catch (e) { /* server offline: stay guest */ }
   auth.ready = true;
   renderAuth();
@@ -219,12 +238,34 @@ const pulls = {};                       // `${company}|${site}` -> { status, ste
 const pullKey = (company, site) => `${company.toLowerCase()}|${site}`;
 const hasExtension = () => !!document.documentElement.dataset.prepifyExt;
 
-function pullSources(company, sites = Object.keys(SITES)) {
+function pullSources(company, sites = PULLABLE) {
   if (!signedIn()) { openSignin(); return; }
+  sites = sites.filter(s => SITES[s] && !SITES[s].linkOnly);
+  const viaServer = sites.filter(s => s === 'Reddit' && auth.sources.reddit_api);
+  const viaExtension = sites.filter(s => !viaServer.includes(s));
+  viaServer.forEach(s => pullFromServer(company, s));
+  if (!viaExtension.length) return;
   if (!hasExtension()) { showExtensionNotice(); return; }
-  sites.forEach(site => { pulls[pullKey(company, site)] = { status: 'working', step: 'starting' }; });
-  window.postMessage({ source: 'prepify-page', type: 'research:start', company, sites }, location.origin);
+  viaExtension.forEach(site => { pulls[pullKey(company, site)] = { status: 'working', step: 'starting' }; });
+  window.postMessage({ source: 'prepify-page', type: 'research:start', company, sites: viaExtension }, location.origin);
   refreshBoxes();
+}
+
+// Sources the Prepify server reads through an official API (nothing is stored there).
+async function pullFromServer(company, site) {
+  const key = pullKey(company, site);
+  pulls[key] = { status: 'working', step: 'searching ' + site };
+  refreshBoxes();
+  try {
+    const payload = await getJson(`/api/sources/${site.toLowerCase()}?company=${encodeURIComponent(company)}`);
+    const added = addCapture(payload, company);
+    const any = (payload.experiences || []).length || (payload.questions || []).length;
+    pulls[key] = { status: any ? 'done' : 'empty', added };
+    rerender();
+  } catch (e) {
+    pulls[key] = { status: 'error', detail: e.message };
+    refreshBoxes();
+  }
 }
 
 function showExtensionNotice() {
@@ -261,13 +302,13 @@ function showHome() {
   $('#home-q').focus();
 }
 
-const urlFor = (q, src) => '/?q=' + encodeURIComponent(q) + (src ? '&src=' + encodeURIComponent(src) : '');
+const urlFor = (q, src, tab) => '/?q=' + encodeURIComponent(q) + (src ? '&src=' + encodeURIComponent(src) : '') + (src && tab ? '&tab=' + encodeURIComponent(tab) : '');
 const currentSrc = () => new URLSearchParams(location.search).get('src');
 
-function go(q, push = true, src = null) {
+function go(q, push = true, src = null, tab = null) {
   q = q.trim();
   if (!q) return;
-  if (push) history.pushState({ q, src }, '', urlFor(q, src));
+  if (push) history.pushState({ q, src, tab }, '', urlFor(q, src, tab));
   return runSearch(q, src);
 }
 
@@ -345,7 +386,7 @@ function renderGuest(d) {
   understoodLine(d.parsed);
   if (!d.parsed.company) return noCompany();
   const name = companyName(d);
-  const links = [['Glassdoor', SITES.Glassdoor], ['AmbitionBox', SITES.AmbitionBox], ['Google', GOOGLE]];
+  const links = [...Object.entries(SITES), ['Google', GOOGLE]];
   $('#report').innerHTML = `
     <div class="notice guest">
       <b>You're browsing as a guest.</b> Guests get links to the sources only. Sign in with Google to pull
@@ -382,7 +423,7 @@ function renderGuest(d) {
 function groupBySource(d) {
   const groups = new Map();
   const blank = (s) => ({ name: s, questions: [], reviews: [], experiences: [], pages: new Map() });
-  Object.keys(SITES).forEach(s => groups.set(s, blank(s)));
+  PULLABLE.forEach(s => groups.set(s, blank(s)));
   const add = (x, kind) => {
     const s = x.source || 'Unknown';
     if (!groups.has(s)) groups.set(s, blank(s));
@@ -438,46 +479,6 @@ const STATUS_TEXT = {
   cancelled: 'Cancelled. Click to retry.'
 };
 
-let activeSite = null;          // which site's dedicated area is open
-
-function render(d, src = null) {
-  const p = d.parsed;
-  understoodLine(p);
-  if (!p.company) return noCompany();
-
-  const name = companyName(d);
-  const groups = groupBySource(d);
-  renderPanel(name, d);
-
-  if (src) activeSite = src;
-  if (!activeSite || !groups.some(g => g.name === activeSite)) activeSite = (groups.find(hasData) || groups[0]).name;
-
-  const withData = groups.filter(hasData).length;
-  const anything = d.questions.length || d.reviews.length || d.experiences.length;
-  let html = `<div class="sources-head">
-      <span>Results from <b>${withData}</b> of ${groups.length} sources <span class="hint">· Click a box to open that site's results below</span></span>
-      ${anything ? '<button class="btn small" data-pdf>Download PDF</button>' : ''}
-    </div>
-    <div class="source-grid">${groups.map(g => sourceCard(g, name)).join('')}</div>`;
-
-  if (!anything) {
-    html += `<div class="empty" style="margin-top:24px;">
-      <h3>Nothing pulled for ${esc(name)} yet</h3>
-      Click a box to pull that site into Prepify, or pull everything at once. Prepify reads the pages
-      in the background using your own signed-in Chrome, so you stay on this page.
-      <div><button class="btn primary" id="empty-research">Pull all sources for ${esc(name)}</button></div>
-    </div>`;
-    $('#report').innerHTML = html;
-    $('#empty-research').onclick = () => pullSources(name);
-  } else {
-    html += `<div id="site-area">${siteArea(groups.find(g => g.name === activeSite), name, groups)}</div>`;
-    $('#report').innerHTML = html;
-    wireSiteArea(name);
-  }
-  wireCards(name);
-  wirePdf();
-}
-
 function sourceCard(g, company) {
   const s = siteInfo(g.name);
   const has = hasData(g);
@@ -489,21 +490,20 @@ function sourceCard(g, company) {
     : (pull && pull.status === 'done' && !pull.added ? '<div class="sc-status done">Up to date</div>' : '');
   const firstQ = g.questions[0] || (g.experiences[0] && (g.experiences[0].questions || [])[0]);
   const preview = firstQ ? `<div class="sc-preview">“${esc(firstQ.text)}”</div>` : '';
-  const active = has && g.name === activeSite;
   return `
-    <button class="source-card ${has ? '' : 'empty-card'} ${busy ? 'busy' : ''} ${active ? 'active' : ''}" data-src="${esc(g.name)}" type="button">
+    <button class="source-card ${has ? '' : 'empty-card'} ${busy ? 'busy' : ''}" data-src="${esc(g.name)}" type="button">
       <div class="sc-head">
         <span class="mark" style="--c:${s.color}">${esc(s.mark)}</span>
         <span class="sc-name">${esc(g.name)}</span>
-        <span class="sc-arrow">${busy ? '' : has ? '↓' : '+'}</span>
+        <span class="sc-arrow">${busy ? '' : has ? '→' : '+'}</span>
       </div>
       ${s.host ? `<div class="sc-host">${esc(s.host)}</div>` : ''}
       ${has ? `
         <div class="sc-stats">
-          <span><b>${g.experiences.length}</b> experiences</span>
-          <span><b>${g.questions.length}</b> questions</span>
-          <span><b>${g.answers}</b> answers</span>
-          <span><b>${g.reviews.length}</b> reviews</span>
+          <span><b>${g.experiences.length}</b> ${g.experiences.length === 1 ? 'experience' : 'experiences'}</span>
+          <span><b>${g.questions.length}</b> ${g.questions.length === 1 ? 'question' : 'questions'}</span>
+          <span><b>${g.answers}</b> ${g.answers === 1 ? 'answer' : 'answers'}</span>
+          <span><b>${g.reviews.length}</b> ${g.reviews.length === 1 ? 'review' : 'reviews'}</span>
         </div>
         ${preview}
         ${statusLine}
@@ -513,6 +513,124 @@ function sourceCard(g, company) {
         ${statusLine}
         <div class="sc-foot">${SITES[g.name] && !statusLine ? `Click to pull from ${esc(g.name)}` : ''}</div>`}
     </button>`;
+}
+
+// Sites Prepify only links to (never reads automatically).
+function linkCards(name) {
+  return Object.entries(SITES).filter(([, s]) => s.linkOnly).map(([label, s]) => `
+    <a class="source-card link-card" href="${s.url(name)}" target="_blank" rel="noopener noreferrer">
+      <div class="sc-head">
+        <span class="mark" style="--c:${s.color}">${esc(s.mark)}</span>
+        <span class="sc-name">${esc(label)}</span>
+        <span class="sc-arrow">↗</span>
+      </div>
+      <div class="sc-host">${esc(s.host)}</div>
+      <div class="sc-stats muted">Links only. ${esc(label)} doesn't allow automated reading.</div>
+      <div class="sc-foot">Open posts about ${esc(name)} in a new tab</div>
+    </a>`).join('');
+}
+
+// ---------- results dashboard + one full page per source ----------
+const TABS = [
+  ['experiences', 'Experiences'],
+  ['questions', 'Questions & answers'],
+  ['discussions', 'Discussions'],
+  ['reviews', 'Reviews'],
+  ['pages', 'Source pages']
+];
+const layoutEl = () => document.querySelector('.layout');
+
+function render(d, src = null) {
+  const p = d.parsed;
+  understoodLine(p);
+  if (!p.company) return noCompany();
+  const groups = groupBySource(d);
+  const g = src && groups.find(x => x.name === src);
+  if (g && hasData(g)) return renderSourcePage(d, g, groups);
+  layoutEl().classList.remove('wide');
+  renderPanel(companyName(d), d);
+  renderDashboard(d, groups);
+}
+
+// kept for old links
+function renderSource(d, src) { render(d, src); }
+
+// ----- dashboard: the source boxes, plus what stands out across sources -----
+function renderDashboard(d, groups) {
+  const name = companyName(d);
+  const withData = groups.filter(hasData);
+  const anything = withData.length > 0;
+  let html = `<div class="sources-head">
+      <span>Results from <b>${withData.length}</b> of ${groups.length} sources <span class="hint">· Click a box to open its page</span></span>
+      ${anything ? '<button class="btn small" data-pdf="">Download PDF</button>' : ''}
+    </div>
+    <div class="source-grid">${groups.map(g => sourceCard(g, name)).join('')}${linkCards(name)}</div>`;
+
+  if (!anything) {
+    html += `<div class="empty" style="margin-top:24px;">
+      <h3>Nothing pulled for ${esc(name)} yet</h3>
+      Click a box to pull that site into Prepify, or pull everything at once. Prepify reads the pages
+      in the background using your own signed-in Chrome, so you stay on this page.
+      <div><button class="btn primary" id="empty-research">Pull all sources for ${esc(name)}</button></div>
+    </div>`;
+    $('#report').innerHTML = html;
+    $('#empty-research').onclick = () => pullSources(name);
+  } else {
+    html += glance(d, withData);
+    $('#report').innerHTML = html;
+    $$('#report [data-open-src]').forEach(b => b.onclick = () => openSource(b.dataset.openSrc));
+  }
+  wireCards(name);
+  wirePdf();
+}
+
+// Cross-source highlights shown under the boxes.
+function glance(d, withData) {
+  const subjects = {};
+  d.questions.forEach(q => { const s = subjectOf(q); subjects[s] = (subjects[s] || 0) + 1; });
+  const sites = new Map();
+  d.questions.forEach(q => {
+    const k = norm(q.text);
+    const e = sites.get(k) || { text: q.text, sites: new Set() };
+    e.sites.add(q.source);
+    sites.set(k, e);
+  });
+  const repeated = [...sites.values()].filter(e => e.sites.size > 1);
+
+  let html = '<div class="glance">';
+  html += `<section class="section">
+      <h2>At a glance</h2>
+      <div class="glance-grid">
+        ${withData.map(g => `
+          <button class="glance-card" data-open-src="${esc(g.name)}">
+            <span class="mark" style="--c:${siteInfo(g.name).color}">${esc(siteInfo(g.name).mark)}</span>
+            <span class="glance-name">${esc(g.name)}</span>
+            <span class="glance-nums">${plural(g.experiences.length, 'experience')} · ${plural(g.questions.length, 'question')}${g.reviews.length ? ' · ' + plural(g.reviews.length, 'review') : ''}</span>
+            <span class="glance-open">Open page →</span>
+          </button>`).join('')}
+      </div>
+    </section>`;
+  if (Object.keys(subjects).length) {
+    html += `<section class="section">
+        <h2>Subjects asked</h2>
+        <p class="sub">Across all sources, worked out from each question's wording.</p>
+        <div class="chips static">${Object.entries(subjects).sort((a, b) => b[1] - a[1])
+          .map(([s, n]) => `<span class="chip-btn">${esc(s)} <span>${n}</span></span>`).join('')}</div>
+      </section>`;
+  }
+  if (repeated.length) {
+    html += `<section class="section">
+        <h2>Asked on more than one site</h2>
+        <p class="sub">The strongest signals: the same question reported independently.</p>
+        <ol class="repeat-list">${repeated.map(e => `<li><span>${esc(e.text)}</span><small>${[...e.sites].map(esc).join(' + ')}</small></li>`).join('')}</ol>
+      </section>`;
+  }
+  return html + '</div>';
+}
+
+function openSource(src, tab = null) {
+  go(lastData.query, true, src, tab);
+  window.scrollTo(0, 0);
 }
 
 function wireCards(name) {
@@ -525,88 +643,196 @@ function wireCards(name) {
       if (SITES[src]) pullSources(name, [src]);
       return;
     }
-    activeSite = src;
-    history.replaceState({ q: lastData.query, src }, '', urlFor(lastData.query, src));
-    rerender(src);
-    const area = $('#site-area');
-    if (area) area.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    openSource(src);
   });
 }
 
-// re-render just the boxes (keeps scroll position and open answers)
+// re-render just the boxes (keeps scroll position)
 function refreshBoxes() {
   if (!lastData || !signedIn()) return;
   const grid = $('#report .source-grid');
   if (!grid) return;
   const name = companyName(lastData);
-  grid.innerHTML = groupBySource(lastData).map(g => sourceCard(g, name)).join('');
+  grid.innerHTML = groupBySource(lastData).map(g => sourceCard(g, name)).join('') + linkCards(name);
   wireCards(name);
 }
 
-// The dedicated area for one website: experiences, questions with answers, reviews, source pages.
-function siteArea(g, company, groups) {
+// ----- one source's own page: breadcrumb, source switcher, header, tabs -----
+function renderSourcePage(d, g, groups) {
+  layoutEl().classList.add('wide');
+  $('#panel').innerHTML = '';
+  const name = companyName(d);
   const s = siteInfo(g.name);
-  // the same question on another site gets an "Also on" tag
-  const elsewhere = new Map();
-  groups.filter(o => o.name !== g.name).forEach(o =>
-    o.questions.forEach(q => elsewhere.set(norm(q.text), o.name)));
+  const counts = {
+    experiences: g.experiences.length,
+    questions: g.questions.length,
+    discussions: g.experiences.filter(x => (x.discussion || []).length).length,
+    reviews: g.reviews.length,
+    pages: g.pages.size
+  };
+  const tabs = TABS.filter(([k]) => counts[k] > 0);
+  const wanted = new URLSearchParams(location.search).get('tab');
+  const tab = tabs.some(([k]) => k === wanted) ? wanted : tabs[0][0];
 
-  const subjects = {};
-  const qs = g.questions.map(q => {
-    const subject = subjectOf(q);
-    subjects[subject] = (subjects[subject] || 0) + 1;
-    return { ...q, subject };
-  });
+  $('#report').innerHTML = `
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <button class="btn small" data-back>← Back to results</button>
+      <span class="crumb-path"><button class="linkbtn" data-back>${esc(name)}</button><span>›</span><b>${esc(g.name)}</b></span>
+      <div class="switcher" role="tablist" aria-label="Sources">
+        ${groups.filter(hasData).map(o => `
+          <button class="switch ${o.name === g.name ? 'active' : ''}" data-switch="${esc(o.name)}" ${o.name === g.name ? 'aria-current="page"' : ''}>
+            <span class="mark tiny" style="--c:${siteInfo(o.name).color}">${esc(siteInfo(o.name).mark)}</span>${esc(o.name)}
+          </button>`).join('')}
+      </div>
+    </nav>
 
-  let n = 0;
-  const sec = (title, sub, body) =>
-    `<section class="section"><h2><span class="num">${String(++n).padStart(2, '0')}</span>${title}</h2>${sub ? `<p class="sub">${sub}</p>` : ''}${body}</section>`;
-
-  let html = `
-    <div class="site-area-head">
+    <header class="source-hero">
       <span class="mark big" style="--c:${s.color}">${esc(s.mark)}</span>
-      <div>
-        <h1>${esc(g.name)} <span class="dim">· ${esc(company)}</span></h1>
-        <div class="sub">${plural(g.experiences.length, 'experience')} · ${plural(g.questions.length, 'question')} · ${plural(g.answers, 'answer')} · ${plural(g.reviews.length, 'review')}</div>
+      <div class="hero-text">
+        <h1>${esc(g.name)} <span class="dim">· ${esc(name)}</span></h1>
+        <div class="sub">${plural(counts.experiences, 'experience')} · ${plural(counts.questions, 'question')} · ${plural(g.answers, 'answer')}${counts.reviews ? ' · ' + plural(counts.reviews, 'review') : ''} · pulled ${fmtDate(g.newest)}</div>
       </div>
       <div class="head-actions">
-        <button class="btn" data-pdf>Download PDF</button>
-        ${SITES[g.name] ? `<button class="btn" id="refresh-src" data-src="${esc(g.name)}">Pull again</button>` : ''}
+        <button class="btn primary" data-pdf="${esc(g.name)}">Download PDF</button>
+        ${SITES[g.name] && !SITES[g.name].linkOnly ? `<button class="btn" id="refresh-src" data-src="${esc(g.name)}">Pull again</button>` : ''}
+        ${s.url ? `<a class="btn" href="${s.url(name)}" target="_blank" rel="noopener noreferrer">Open ${esc(g.name)} ↗</a>` : ''}
       </div>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      ${tabs.map(([k, label]) => `<button class="tab ${k === tab ? 'active' : ''}" role="tab" aria-selected="${k === tab}" data-tab="${k}">${label}<span>${counts[k]}</span></button>`).join('')}
+    </nav>
+    <div id="tab-body" role="tabpanel"></div>
+
+    <div class="page-foot">
+      <button class="btn" data-back>← Back to results</button>
+      <button class="linkbtn" id="to-top">Back to top ↑</button>
     </div>`;
 
-  if (g.experiences.length) {
-    html += sec('Interview experiences', `What candidates went through, as written on ${esc(g.name)}. Newest first.`,
-      `<div class="xp-list">${[...g.experiences].sort(byDateDesc).map((x, i) => xpCard(x, i)).join('')}</div>`);
+  const showTab = (k) => {
+    $$('.tabs .tab').forEach(t => { t.classList.toggle('active', t.dataset.tab === k); t.setAttribute('aria-selected', t.dataset.tab === k); });
+    history.replaceState({ q: d.query, src: g.name, tab: k }, '', urlFor(d.query, g.name, k));
+    $('#tab-body').innerHTML = tabBody(k, g, groups);
+    wireTab(k, name);
+  };
+  $$('.tabs .tab').forEach(t => t.onclick = () => showTab(t.dataset.tab));
+  $$('[data-back]').forEach(b => b.onclick = () => { go(d.query, true); window.scrollTo(0, 0); });
+  $$('[data-switch]').forEach(b => b.onclick = () => openSource(b.dataset.switch));
+  $('#to-top').onclick = () => window.scrollTo({ top: 0, behavior: 'smooth' });
+  const rb = $('#refresh-src');
+  if (rb) rb.onclick = () => { pullSources(name, [rb.dataset.src]); rb.textContent = 'Pulling…'; rb.disabled = true; };
+  showTab(tab);
+  wirePdf();
+}
+
+function tabBody(k, g, groups) {
+  if (k === 'experiences') {
+    const list = [...g.experiences].sort(byDateDesc);
+    const counts = { good: 0, bad: 0, none: 0 };
+    list.forEach(x => { counts[outcomeKind(x.outcome) || 'none'] += 1; });
+    return `
+      <div class="qa-tools">
+        <div class="chips">
+          <button class="chip-btn active" data-outcome="">All <span>${list.length}</span></button>
+          ${counts.good ? `<button class="chip-btn" data-outcome="good">Offer or selected <span>${counts.good}</span></button>` : ''}
+          ${counts.bad ? `<button class="chip-btn" data-outcome="bad">No offer or rejected <span>${counts.bad}</span></button>` : ''}
+          ${counts.none && counts.none !== list.length ? `<button class="chip-btn" data-outcome="none">Outcome not stated <span>${counts.none}</span></button>` : ''}
+        </div>
+        <input class="qa-filter" id="xp-filter" placeholder="Filter experiences…" aria-label="Filter experiences" />
+      </div>
+      <div class="xp-list">${list.map((x, i) => xpCard(x, i)).join('')}</div>
+      <p class="qa-none hidden" id="xp-none">No experiences match.</p>`;
   }
 
-  if (qs.length) {
-    const chips = Object.entries(subjects).sort((a, b) => b[1] - a[1]);
-    html += sec('Interview questions and answers', `As shown on ${esc(g.name)}, grouped by subject.`,
-      `<div class="qa-tools">
-         <div class="chips">
-           <button class="chip-btn active" data-subject="">All <span>${qs.length}</span></button>
-           ${chips.map(([c, k]) => `<button class="chip-btn" data-subject="${esc(c)}">${esc(c)} <span>${k}</span></button>`).join('')}
-         </div>
-         <input class="qa-filter" id="qa-filter" placeholder="Filter questions…" aria-label="Filter questions" />
-       </div>
-       <div class="qa-list">
-         ${qs.map((q, i) => qaCard(q, i, g.name, elsewhere.get(norm(q.text)))).join('')}
-       </div>
-       <p class="qa-none hidden" id="qa-none">No questions match.</p>`);
+  if (k === 'questions') {
+    const elsewhere = new Map();
+    groups.filter(o => o.name !== g.name).forEach(o => o.questions.forEach(q => elsewhere.set(norm(q.text), o.name)));
+    const subjects = {};
+    const qs = g.questions.map(q => { const subject = subjectOf(q); subjects[subject] = (subjects[subject] || 0) + 1; return { ...q, subject }; });
+    return `
+      <div class="qa-tools">
+        <div class="chips">
+          <button class="chip-btn active" data-subject="">All <span>${qs.length}</span></button>
+          ${Object.entries(subjects).sort((a, b) => b[1] - a[1]).map(([c, n]) => `<button class="chip-btn" data-subject="${esc(c)}">${esc(c)} <span>${n}</span></button>`).join('')}
+        </div>
+        <input class="qa-filter" id="qa-filter" placeholder="Filter questions…" aria-label="Filter questions" />
+      </div>
+      <div class="qa-list">${qs.map((q, i) => qaCard(q, i, g.name, elsewhere.get(norm(q.text)))).join('')}</div>
+      <p class="qa-none hidden" id="qa-none">No questions match.</p>`;
   }
 
-  if (g.reviews.length) {
-    html += sec('Reviews', `From ${esc(g.name)}.`, g.reviews.map(r => reviewHtml(r)).join(''));
+  if (k === 'discussions') {
+    const threads = g.experiences.filter(x => (x.discussion || []).length).sort((a, b) => (b.score || 0) - (a.score || 0));
+    return `<div class="thread-list">${threads.map(x => `
+      <article class="thread">
+        <header>
+          <a class="thread-title" href="${esc(x.url || '#')}" target="_blank" rel="noopener noreferrer">${esc(x.role || 'Discussion')}</a>
+          <div class="thread-meta">${esc([x.location, x.date].filter(Boolean).join(' · '))}${x.score ? ` · ▲ ${esc(x.score)}` : ''}${x.comments ? ` · ${plural(x.comments, 'comment')}` : ''}</div>
+        </header>
+        ${x.process ? `<details class="thread-post"><summary>Original post</summary><p>${esc(x.process)}</p></details>` : ''}
+        <ul class="xp-discussion">${x.discussion.map(c => `<li><span class="score">▲ ${esc(c.score)}</span><p>${esc(c.text)}</p></li>`).join('')}</ul>
+      </article>`).join('')}</div>`;
   }
 
-  html += sec('Source pages', 'Every item above came from one of these pages.',
-    [...g.pages.values()].map(pg => `
+  if (k === 'reviews') return `<div class="review-list">${g.reviews.map(r => reviewHtml(r)).join('')}</div>`;
+
+  return `<p class="sub">Every item on this page came from one of these pages.</p>
+    ${[...g.pages.values()].map(pg => `
       <div class="result">
         <div class="title"><a href="${esc(pg.url)}" target="_blank" rel="noopener noreferrer">${esc(pg.url)}</a></div>
         <div class="meta">${plural(pg.items, 'item')} · pulled ${fmtDate(pg.saved)}</div>
-      </div>`).join(''));
-  return html;
+      </div>`).join('')}`;
+}
+
+function wireTab(k, company) {
+  $$('#tab-body .more-btn').forEach(b => {
+    b.dataset.label = b.textContent;
+    b.onclick = () => {
+      const box = b.previousElementSibling;
+      const open = box.classList.toggle('hidden') === false;
+      b.textContent = open ? 'Hide answers' : b.dataset.label;
+    };
+  });
+
+  if (k === 'questions') {
+    let subject = '';
+    const apply = () => {
+      const f = $('#qa-filter').value.trim().toLowerCase();
+      let shown = 0;
+      $$('.qa-card').forEach(c => {
+        const ok = (!subject || c.dataset.subject === subject) && (!f || c.dataset.text.includes(f));
+        c.classList.toggle('hidden', !ok);
+        if (ok) shown += 1;
+      });
+      $('#qa-none').classList.toggle('hidden', shown > 0);
+    };
+    $$('#tab-body [data-subject]').forEach(b => b.onclick = () => {
+      subject = b.dataset.subject;
+      $$('#tab-body [data-subject]').forEach(x => x.classList.toggle('active', x === b));
+      apply();
+    });
+    $('#qa-filter').oninput = apply;
+  }
+
+  if (k === 'experiences') {
+    let outcome = '';
+    const apply = () => {
+      const f = $('#xp-filter').value.trim().toLowerCase();
+      let shown = 0;
+      $$('.xp-card').forEach(c => {
+        const ok = (!outcome || c.dataset.outcome === outcome) && (!f || c.textContent.toLowerCase().includes(f));
+        c.classList.toggle('hidden', !ok);
+        if (ok) shown += 1;
+      });
+      $('#xp-none').classList.toggle('hidden', shown > 0);
+    };
+    $$('#tab-body [data-outcome]').forEach(b => b.onclick = () => {
+      outcome = b.dataset.outcome;
+      $$('#tab-body [data-outcome]').forEach(x => x.classList.toggle('active', x === b));
+      apply();
+    });
+    $('#xp-filter').oninput = apply;
+  }
 }
 
 // newest experiences first; "3 months ago" style dates sort after real dates
@@ -638,7 +864,7 @@ function xpCard(x, i) {
   const preview = x.process || x.application || (x.rounds && x.rounds[0] && `${x.rounds[0].name}: ${x.rounds[0].detail}`) || '';
   const title = cleanRole(x.role) || `Interview experience ${i + 1}`;
   return `
-    <details class="xp-card" ${i === 0 ? 'open' : ''}>
+    <details class="xp-card" data-outcome="${outcomeKind(x.outcome) || 'none'}" ${i === 0 ? 'open' : ''}>
       <summary>
         <div class="xp-head">
           <span class="xp-role">${esc(title)}</span>
@@ -647,6 +873,7 @@ function xpCard(x, i) {
         <div class="xp-badges">
           ${badge(x.outcome, outcomeKind(x.outcome))}${badge(x.experience, experienceKind(x.experience))}${badge(x.difficulty)}
           ${(x.rounds || []).length ? badge(plural(x.rounds.length, 'round')) : ''}${(x.questions || []).length ? badge(plural(x.questions.length, 'question')) : ''}
+          ${x.comments ? badge(plural(x.comments, 'comment')) : ''}${x.score ? badge('▲ ' + x.score) : ''}
         </div>
         ${preview ? `<div class="xp-preview">${esc(preview)}</div>` : ''}
       </summary>
@@ -656,6 +883,8 @@ function xpCard(x, i) {
         ${block('Rounds', rounds)}
         ${block('Questions asked', qs)}
         ${block('Tips', para(x.tips))}
+        ${(x.discussion || []).length ? block(`Discussion · top ${plural(x.discussion.length, 'comment')}`,
+          `<ul class="xp-discussion">${x.discussion.map(c => `<li><span class="score">▲ ${esc(c.score)}</span><p>${esc(c.text)}</p></li>`).join('')}</ul>`) : ''}
         ${x.url ? `<div class="meta">Pulled ${fmtDate(x.created_at)} · <a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">Source page</a></div>` : ''}
       </div>
     </details>`;
@@ -682,40 +911,6 @@ function qaCard(q, i, site, alsoOn) {
              <button class="linkbtn more-btn">Show ${plural(rest.length, 'more answer')}</button>` : ''}`
         : `<div class="answer none">No answer shown on ${esc(site)}</div>`}
     </article>`;
-}
-
-function wireSiteArea(company) {
-  const rb = $('#refresh-src');
-  if (rb) rb.onclick = () => { pullSources(company, [rb.dataset.src]); rb.textContent = 'Pulling…'; rb.disabled = true; };
-
-  $$('.more-btn').forEach(b => {
-    b.dataset.label = b.textContent;
-    b.onclick = () => {
-      const box = b.previousElementSibling;
-      const open = box.classList.toggle('hidden') === false;
-      b.textContent = open ? 'Hide answers' : b.dataset.label;
-    };
-  });
-
-  let subject = '';
-  const apply = () => {
-    const f = ($('#qa-filter') ? $('#qa-filter').value : '').trim().toLowerCase();
-    let shown = 0;
-    $$('.qa-card').forEach(c => {
-      const ok = (!subject || c.dataset.subject === subject) && (!f || c.dataset.text.includes(f));
-      c.classList.toggle('hidden', !ok);
-      if (ok) shown += 1;
-    });
-    const none = $('#qa-none');
-    if (none) none.classList.toggle('hidden', shown > 0);
-  };
-  $$('.chip-btn').forEach(b => b.onclick = () => {
-    subject = b.dataset.subject;
-    $$('.chip-btn').forEach(x => x.classList.toggle('active', x === b));
-    apply();
-  });
-  const fi = $('#qa-filter');
-  if (fi) fi.oninput = apply;
 }
 
 function reviewHtml(r) {
@@ -776,7 +971,7 @@ function wirePdf() {
   $$('[data-pdf]').forEach(b => b.onclick = async () => {
     const label = b.textContent;
     b.disabled = true; b.textContent = 'Preparing PDF…';
-    try { await downloadPdf(lastData); }
+    try { await downloadPdf(lastData, b.dataset.pdf || null); }
     catch (e) { alertInline(e.message); }
     finally { b.disabled = false; b.textContent = label; }
   });
@@ -788,7 +983,7 @@ function alertInline(msg) {
   $('#report').insertAdjacentHTML('afterbegin', `<div class="notice" id="pdf-error"><b>PDF not created.</b> ${esc(msg)}</div>`);
 }
 
-async function downloadPdf(d) {
+async function downloadPdf(d, only = null) {
   const JsPDF = await loadJsPdf();
   const doc = new JsPDF({ unit: 'pt', format: 'a4' });
   const W = doc.internal.pageSize.getWidth();
@@ -813,7 +1008,7 @@ async function downloadPdf(d) {
   const rule = (color = [220, 220, 220]) => { ensure(10); doc.setDrawColor(...color); doc.line(M, y, W - M, y); y += 10; };
 
   const name = companyName(d);
-  const groups = groupBySource(d).filter(hasData);
+  const groups = groupBySource(d).filter(hasData).filter(g => !only || g.name === only);
   const muted = [110, 110, 110];
   const accent = [196, 110, 50];
 
@@ -848,6 +1043,10 @@ async function downloadPdf(d) {
           y += 2;
         }
         if (x.tips) write('Tips: ' + x.tips, { indent: 14 });
+        if ((x.discussion || []).length) {
+          write('Discussion (top comments):', { bold: true, indent: 14, after: 2 });
+          x.discussion.slice(0, 3).forEach(c => write(`- ${c.text.slice(0, 600)}`, { indent: 24, color: muted, after: 3 }));
+        }
         y += 6;
       });
     }
@@ -898,7 +1097,7 @@ async function downloadPdf(d) {
   }
 
   const file = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'company';
-  doc.save(`${file}-interview-preparation.pdf`);
+  doc.save(`${file}${only ? '-' + only.toLowerCase() : ''}-interview-preparation.pdf`);
 }
 
 // ---------- wiring ----------

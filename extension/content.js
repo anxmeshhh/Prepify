@@ -3,7 +3,10 @@
   window.__prepifyLoaded = true;
 
   const host = location.hostname;
-  const SOURCE = host.includes('ambitionbox') ? 'AmbitionBox' : 'Glassdoor';
+  const SOURCE = host.includes('ambitionbox') ? 'AmbitionBox'
+    : host.includes('indeed') ? 'Indeed'
+    : host.includes('geeksforgeeks') ? 'GeeksforGeeks'
+    : 'Glassdoor';
 
   // ---------- helpers ----------
   const clean = (t) => (t || '').replace(/\s+/g, ' ').trim();
@@ -225,7 +228,7 @@
   // Everything readable on this page. Questions found inside experiences are also listed on
   // their own (with their answers) so the Q&A view has them too.
   function collect() {
-    const experiences = extractExperiences();
+    const experiences = SOURCE === 'GeeksforGeeks' && isArticlePage() ? [extractArticle()] : extractExperiences();
     const questions = extractQuestions();
     const seen = new Map(questions.map(q => [q.text, q]));
     experiences.forEach(xp => xp.questions.forEach(q => {
@@ -303,8 +306,11 @@
   const slug = (t) => t.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
   function isInterviewPage() {
-    return SOURCE === 'Glassdoor' ? /\/Interview\//i.test(location.pathname)
-                                  : /\/interviews\//i.test(location.pathname);
+    if (SOURCE === 'Glassdoor') return /\/Interview\//i.test(location.pathname);
+    if (SOURCE === 'AmbitionBox') return /\/interviews\//i.test(location.pathname);
+    if (SOURCE === 'Indeed') return /\/cmp\/[^/]+\/interviews/i.test(location.pathname);
+    if (SOURCE === 'GeeksforGeeks') return isArticlePage();
+    return false;
   }
 
   // A bot check (Cloudflare / "Help us protect Glassdoor") rather than real content.
@@ -318,7 +324,7 @@
   // A real sign-in wall: a login URL, or a visible dialog asking to sign in. Plain "Sign in"
   // links in the site header don't count (they appear on every page).
   function looksLikeLoginWall() {
-    if (/\/(profile\/login|member\/|login|signin)/i.test(location.pathname)) return true;
+    if (/\/(profile\/login|member\/|login|signin|account\/login)/i.test(location.pathname)) return true;
     const dialogs = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [class*="modal" i]')]
       .filter(d => d.offsetParent !== null || getComputedStyle(d).position === 'fixed');
     if (dialogs.some(d => /sign in|log in|continue with google|create (a free )?account|sign up/i.test(d.innerText || ''))) return true;
@@ -343,7 +349,7 @@
           return `${location.origin}/Interview/${slug(company)}-Interview-Questions-E${m[1]}.htm`;
         }
       }
-    } else {
+    } else if (SOURCE === 'AmbitionBox') {
       const direct = links.find(h => /\/interviews\/[^/?#]+-interview-questions/i.test(h) && h.toLowerCase().includes(want));
       if (direct) return direct;
       for (const h of links) {
@@ -352,15 +358,90 @@
       }
       // last resort: AmbitionBox slugs usually match the company name
       return `${location.origin}/interviews/${slug(company)}-interview-questions`;
+    } else if (SOURCE === 'Indeed') {
+      const direct = links.find(h => /\/cmp\/[^/?#]+\/interviews/i.test(h) && h.toLowerCase().includes(want));
+      if (direct) return direct;
+      for (const h of links) {
+        const m = h.match(/\/cmp\/([^/?#]+)/i);
+        if (m && m[1].toLowerCase().includes(want)) return `${location.origin}/cmp/${m[1]}/interviews`;
+      }
     }
     return null;
   }
 
-  async function researchMode() {
-    const job = await send({ type: 'research:whoami' });
-    if (!job) return;
-    btn.style.display = 'none';
+  // ---------- article sources (GeeksforGeeks interview experiences) ----------
+  function isArticlePage() {
+    return !!document.querySelector('article h1, main h1, h1') && /interview/i.test(document.title + ' ' + location.pathname)
+      && !/\/(search|tag|category)\b/i.test(location.pathname);
+  }
 
+  // Interview-experience article links on a search or tag page, best matches first.
+  function articleLinks(company) {
+    const want = slug(company).split('-')[0];
+    const seen = new Set();
+    return [...document.querySelectorAll('a[href]')]
+      .filter(a => {
+        const h = a.href.split('#')[0].split('?')[0];
+        const text = (a.textContent + ' ' + h).toLowerCase();
+        if (seen.has(h) || !/geeksforgeeks\.org\/[a-z0-9-]+/.test(h) || /\/(tag|category|search|user)\//.test(h)) return false;
+        if (!/interview/.test(text) || !text.includes(want)) return false;
+        seen.add(h);
+        return true;
+      })
+      .map(a => a.href.split('#')[0].split('?')[0]);
+  }
+
+  // Questions written into free text: lines/items that end in "?" or start with "Q1." etc.
+  function questionsFromText(nodes) {
+    const out = [];
+    const seen = new Set();
+    nodes.forEach(n => {
+      clean(n.textContent).split(/(?<=\?)\s+/).forEach(s => {
+        const t = stripQLabel(s.trim());
+        if (t.length < 12 || t.length > 300 || seen.has(t)) return;
+        if (/\?$/.test(t) || /^(q\s?\d+|question\s*\d+)/i.test(s.trim())) { seen.add(t); out.push({ text: t, answers: [] }); }
+      });
+    });
+    return out;
+  }
+
+  // One article = one experience: title, date, rounds (from headings), questions, write-up.
+  function extractArticle() {
+    const root = document.querySelector('article') || document.querySelector('main') || document.body;
+    const h1 = root.querySelector('h1') || document.querySelector('h1');
+    const title = clean(h1 && h1.textContent);
+    const dateText = clean((document.querySelector('time') || {}).textContent || '') ||
+      ((root.innerText.match(/(?:Last Updated|Published|Updated)\s*:?\s*([0-9]{1,2}\s+[A-Za-z]{3,9},?\s+\d{4})/i) || [])[1] || '');
+
+    const xp = { role: title.replace(/\s*[-|:]\s*GeeksforGeeks.*$/i, ''), date: dateText, location: '', outcome: '',
+                 experience: '', difficulty: '', application: '', process: '', rounds: [], questions: [], tips: '' };
+
+    const blocks = [...root.querySelectorAll('h2, h3, h4, p, li, strong, b')];
+    let current = null;
+    const intro = [];
+    blocks.forEach(el => {
+      const t = clean(el.textContent);
+      if (!t) return;
+      const isHeading = /^H[234]$/.test(el.tagName) || (/^(STRONG|B)$/.test(el.tagName) && t.length < 80 && el.parentElement && clean(el.parentElement.textContent) === t);
+      if (isHeading && /round|test|interview|assessment|hr\b|technical|coding|aptitude|managerial|online/i.test(t)) {
+        current = { name: t.replace(/[:：]$/, ''), detail: '' };
+        xp.rounds.push(current);
+        return;
+      }
+      if (isHeading && /tip|advice|preparation|suggestion/i.test(t)) { current = { tips: true }; return; }
+      if (el.tagName === 'P' || el.tagName === 'LI') {
+        if (current && current.tips) xp.tips = [xp.tips, t].filter(Boolean).join('\n');
+        else if (current) current.detail = [current.detail, t].filter(Boolean).join('\n').slice(0, 2500);
+        else if (intro.join(' ').length < 900) intro.push(t);
+      }
+    });
+    xp.process = intro.join('\n');
+    if (/selected|got the offer|received (an|the) offer/i.test(root.innerText)) xp.outcome = 'Selected';
+    xp.questions = questionsFromText([...root.querySelectorAll('li, p')]).slice(0, 40);
+    return xp;
+  }
+
+  async function settle() {
     // single-page apps keep rendering after load; wait until the text stops growing
     let last = -1;
     for (let i = 0; i < 8; i++) {
@@ -369,10 +450,32 @@
       if (len === last && len > 500) break;
       last = len;
     }
+  }
+
+  async function researchMode() {
+    const job = await send({ type: 'research:whoami' });
+    if (!job) return;
+    btn.style.display = 'none';
+    await settle();
 
     const fail = (status) => send({ type: 'research:result', status, url: location.href, detail: pageDetail() });
-
     if (looksBlocked()) return fail('blocked');
+
+    // GeeksforGeeks: queue a few interview-experience articles, then read each one
+    if (SOURCE === 'GeeksforGeeks') {
+      if (isArticlePage()) {
+        const xp = extractArticle();
+        const payload = { source: SOURCE, url: location.href, company_name: job.company,
+                          questions: xp.questions.map(q => ({ ...q, role: xp.role })), reviews: [], experiences: [xp] };
+        return send({ type: 'research:partial', payload, url: location.href });
+      }
+      const links = articleLinks(job.company);
+      if (links.length) return send({ type: 'research:queue', urls: links.slice(0, 4), step: `reading ${Math.min(links.length, 4)} articles` });
+      if (!/\/tag\//.test(location.pathname)) {
+        return send({ type: 'research:navigate', url: `${location.origin}/tag/${slug(job.company)}/`, step: 'opening company tag page' });
+      }
+      return fail('not-found');
+    }
 
     if (!isInterviewPage()) {
       // look for the company's interview link first: header "Sign in" text is not a wall
