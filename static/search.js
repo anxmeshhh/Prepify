@@ -60,7 +60,7 @@ const SITES = {
   },
   PrepInsta: {
     mark: 'P', color: '#6c8cff', host: 'prepinsta.com',
-    url: (n) => `https://prepinsta.com/?s=${encodeURIComponent(n + ' interview')}`
+    url: (n) => `https://prepinsta.com/${n.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ')[0]}/`
   },
   LeetCode: {
     mark: 'LC', color: '#ffa116', host: 'leetcode.com/discuss',

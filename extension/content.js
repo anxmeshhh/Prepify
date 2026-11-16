@@ -348,6 +348,27 @@
 
   const pageDetail = () => `${document.title.slice(0, 80)} (${location.pathname})`;
 
+  // The site's own "page not found" page (PrepInsta: "404 Error - Oops").
+  function looksNotFound() {
+    const h1 = clean((document.querySelector('h1') || {}).textContent || '');
+    return /\b404\b|not found|page (doesn.t|does not) exist|oo+ps\b/i.test(document.title + ' | ' + h1);
+  }
+
+  // Pop-ups, ad modals, "allow notifications" banners, sticky bars and embedded frames (ads, Google's
+  // sign-in bubble) are removed before reading so their text never ends up in results. Only used in
+  // tabs Prepify opened in the background; nothing is clicked or accepted.
+  function removeOverlays() {
+    const noisy = /(modal|popup|pop-up|overlay|onesignal|subscribe|newsletter|cookie|consent|banner|advert|adsbygoogle|\bads?\b|promo|offer|interstitial|toast|notification|push)/i;
+    [...document.querySelectorAll('body *')].forEach(el => {
+      if (!el.isConnected) return;
+      if (el.matches('iframe, ins, [role="dialog"], [aria-modal="true"]')) { el.remove(); return; }
+      const style = getComputedStyle(el);
+      const tag = (el.id || '') + ' ' + (typeof el.className === 'string' ? el.className : '');
+      const floating = style.position === 'fixed' || style.position === 'sticky';
+      if ((floating && el.getBoundingClientRect().height > 60) || (noisy.test(tag) && style.position !== 'static')) el.remove();
+    });
+  }
+
   // From a search or company page, find the company's interview page.
   function findInterviewUrl(company) {
     const links = [...document.querySelectorAll('a[href]')].map(a => a.href);
@@ -453,7 +474,10 @@
     PrepInsta: {
       article: () => /prepinsta\.com\/[a-z0-9-]+\/[a-z0-9-]+/i.test(location.href) && !/[?&]s=/.test(location.search),
       link: (h) => /prepinsta\.com\/[a-z0-9-]+\/[a-z0-9-]*(interview|recruitment|selection|placement|syllabus|pattern|questions)/i.test(h),
-      fallback: (c) => /[?&]s=/.test(location.search) ? `${location.origin}/${slug(c).split('-')[0]}/` : null
+      fallback: (c) => {
+        const hub = `${location.origin}/${slug(c).split('-')[0]}/`;
+        return location.href.split('?')[0] === hub ? null : hub;
+      }
     },
     Code360: {
       article: () => /\/code360\/interview-experiences\/[^/]+\/[^/?#]+/i.test(location.pathname),
@@ -527,7 +551,8 @@
   }
 
   // One article page -> payload parts. Q&A pages give questions with answers; write-ups give an experience.
-  function readArticlePage() {
+  function readArticlePage(inBackgroundTab = false) {
+    if (inBackgroundTab) removeOverlays();     // never alter a page the user is looking at
     const root = document.querySelector('article, .entry-content, [class*="post-content" i], main') || document.body;
     const qa = extractQA(root);
     const xp = extractArticle();
@@ -627,9 +652,15 @@
     }
 
     // Article sources (GeeksforGeeks, LeetCode Discuss, PrepInsta, Code360): queue a few articles, read each
+    if (ARTICLE_SOURCES[SOURCE] && looksNotFound()) {
+      if (job.reading) return send({ type: 'research:partial', payload: { questions: [], reviews: [], experiences: [] }, url: location.href });
+      const next = ARTICLE_SOURCES[SOURCE].fallback(job.company);
+      if (next && next !== location.href) return send({ type: 'research:navigate', url: next, step: 'opening the company page' });
+      return fail('not-found');
+    }
     if (ARTICLE_SOURCES[SOURCE]) {
       if (job.reading || isArticlePage()) {
-        const payload = { source: SOURCE, url: location.href, company_name: job.company, ...readArticlePage() };
+        const payload = { source: SOURCE, url: location.href, company_name: job.company, ...readArticlePage(true) };
         return send({ type: 'research:partial', payload, url: location.href });
       }
       const links = articleLinks(job.company);

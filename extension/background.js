@@ -20,7 +20,8 @@ const START_URL = {
   // old.reddit.com is plain HTML: search, then read the top threads like articles
   Reddit: (c) => `https://old.reddit.com/search?q=${encodeURIComponent(c + ' interview')}&sort=relevance&t=all`,
   LeetCode: (c) => `https://leetcode.com/discuss/interview-experience?currentPage=1&orderBy=most_relevant&query=${encodeURIComponent(c)}`,
-  PrepInsta: (c) => `https://prepinsta.com/?s=${encodeURIComponent(c + ' interview')}`,
+  // PrepInsta's search sends you to a 404; its company pages live at /<company>/ (e.g. /tcs/)
+  PrepInsta: (c) => `https://prepinsta.com/${c.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ')[0]}/`,
   Code360: (c) => `https://www.naukri.com/code360/interview-experiences/${c.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`
 };
 const API_SOURCES = {};
