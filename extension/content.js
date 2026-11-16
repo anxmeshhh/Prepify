@@ -43,6 +43,9 @@
     return label.parentElement;
   }
 
+  // "Question 1Tell me about..." -> "Tell me about..."
+  const stripQLabel = (t) => t.replace(/^\s*(question|q)\s*\d+\s*[:.)\-]?\s*/i, '');
+
   // ---------- extractors ----------
   // Answers shown under a question: an "Answer"/"3 Answers"/"Ans" label near it, followed by the text.
   const ANSWER_RE = /^(\d+\s+)?(answers?|interview answers?|ans)$/i;
@@ -62,7 +65,7 @@
     const out = [];
     const seen = new Map();
     const add = (text, answers = []) => {
-      text = clean(text);
+      text = stripQLabel(clean(text));
       if (text.length < 8 || text.length > 1500) return;
       if (seen.has(text)) {               // same question twice on a page: keep all answers
         const q = seen.get(text);
@@ -159,11 +162,11 @@
 
   // Splits a questions block into separate questions (list items, lines or "Q1." prefixes).
   function splitQuestions(block) {
-    const items = [...block.querySelectorAll('li, p')].map(e => clean(e.textContent)).filter(t => t.length > 8);
+    const items = [...block.querySelectorAll('li, p')].map(e => stripQLabel(clean(e.textContent))).filter(t => t.length > 8);
     if (items.length > 1) return items;
     const t = clean(block.textContent);
-    const parts = t.split(/(?:^|\s)(?:Q\s?\d+[.):]|\d+[.)])\s+/).filter(p => p.length > 8);
-    return parts.length > 1 ? parts : (t.length > 8 ? [t] : []);
+    const parts = t.split(/(?:^|\s)(?:Q\s?\d+[.):]|\d+[.)])\s+/).map(stripQLabel).filter(p => p.length > 8);
+    return parts.length > 1 ? parts : (t.length > 8 ? [stripQLabel(t)] : []);
   }
 
   function extractExperiences() {
@@ -175,7 +178,9 @@
     return list.map(card => {
       const xp = { role: '', date: '', location: '', outcome: '', experience: '', difficulty: '',
                    application: '', process: '', rounds: [], questions: [], tips: '' };
-      const heading = card.querySelector('h2, h3, h4, [class*="title" i], [data-test*="title" i]');
+      const heads = [...card.querySelectorAll('h1, h2, h3, h4, h5, [class*="title" i], [data-test*="title" i]')]
+        .filter(h => { const t = clean(h.textContent); return t.length > 3 && t.length < 140 && !/^(question|q)\s*\d+$/i.test(t) && !XP_LABEL.test(t); });
+      const heading = heads.find(h => /interview$/i.test(clean(h.textContent))) || heads[0];
       xp.role = clean(heading && heading.textContent)
         .replace(/\s+interview(\s+questions?)?(\s+(and|&)\s+answers?)?$/i, '').slice(0, 120);
 
