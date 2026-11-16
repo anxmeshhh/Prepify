@@ -290,7 +290,7 @@ window.addEventListener('message', (e) => {
   if (m.type !== 'research:update') return;
   let added = 0;
   if (m.status === 'done' && m.payload) added = addCapture(m.payload, m.company);
-  pulls[pullKey(m.company, m.site)] = { status: m.status, step: m.step, added };
+  pulls[pullKey(m.company, m.site)] = { status: m.status, step: m.step, added, detail: m.detail };
   m.status === 'done' ? rerender() : refreshBoxes();
 });
 
@@ -488,6 +488,8 @@ function sourceCard(g, company) {
   const statusLine = pull && STATUS_TEXT[pull.status]
     ? `<div class="sc-status ${pull.status}">${busy ? '<span class="spinner"></span>' : ''}${esc(stepText || STATUS_TEXT[pull.status])}</div>`
     : (pull && pull.status === 'done' && !pull.added ? '<div class="sc-status done">Up to date</div>' : '');
+  const detailLine = pull && pull.detail && !busy && pull.status !== 'done'
+    ? `<div class="sc-detail" title="${esc(pull.detail)}">Stopped at: ${esc(pull.detail)}</div>` : '';
   const firstQ = g.questions[0] || (g.experiences[0] && (g.experiences[0].questions || [])[0]);
   const preview = firstQ ? `<div class="sc-preview">“${esc(firstQ.text)}”</div>` : '';
   return `
@@ -510,7 +512,7 @@ function sourceCard(g, company) {
         <div class="sc-foot">Pulled ${fmtDate(g.newest)} · ${plural(g.pages.size, 'page')}</div>`
       : `
         <div class="sc-stats muted">Nothing pulled yet</div>
-        ${statusLine}
+        ${statusLine}${detailLine}
         <div class="sc-foot">${SITES[g.name] && !statusLine ? `Click to pull from ${esc(g.name)}` : ''}</div>`}
     </button>`;
 }

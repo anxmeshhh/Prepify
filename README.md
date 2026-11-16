@@ -51,12 +51,12 @@ When you click a source box, the extension opens that site in a background tab a
 | --- | --- | --- |
 | Glassdoor | Extension, in your own signed-in Chrome | Interview experiences, questions, answers |
 | AmbitionBox | Extension | Experiences with rounds, questions, answers, tips |
-| Indeed | Extension (same login as Glassdoor) | Interview experiences and questions |
+| Indeed | Extension (same login as Glassdoor); tries the company page directly if search has no link | Interview experiences and questions |
 | GeeksforGeeks | Extension: searches "<company> interview experience" and reads up to 4 articles | Round-by-round write-ups, questions, tips |
-| Reddit | Official Reddit API on the Prepify server when `REDDIT_CLIENT_ID` is set, otherwise through the extension | Threads with the original post and top comments |
+| Reddit | Extension reads old.reddit.com search and up to 4 threads (no setup). If `REDDIT_CLIENT_ID` is set, the official API on the Prepify server is used instead | Threads with the original post and top comments |
 | LinkedIn | Links only | LinkedIn doesn't allow automated reading, so Prepify only links to posts |
 
-### Enable Reddit (official API)
+### Optional: Reddit official API
 
 1. Go to https://www.reddit.com/prefs/apps, click **create another app** and choose **installed app**. Use `http://localhost:5000` as the redirect URI; it isn't used.
 2. Copy the client ID, the short string under the app name, into `.env` as `REDDIT_CLIENT_ID=...`, then restart Prepify. No secret and no Reddit login are needed. Results go straight to your browser and the server stores nothing.

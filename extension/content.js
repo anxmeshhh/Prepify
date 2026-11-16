@@ -5,6 +5,7 @@
   const host = location.hostname;
   const SOURCE = host.includes('ambitionbox') ? 'AmbitionBox'
     : host.includes('indeed') ? 'Indeed'
+    : host.includes('reddit') ? 'Reddit'
     : host.includes('geeksforgeeks') ? 'GeeksforGeeks'
     : 'Glassdoor';
 
@@ -228,7 +229,9 @@
   // Everything readable on this page. Questions found inside experiences are also listed on
   // their own (with their answers) so the Q&A view has them too.
   function collect() {
-    const experiences = SOURCE === 'GeeksforGeeks' && isArticlePage() ? [extractArticle()] : extractExperiences();
+    const experiences = SOURCE === 'GeeksforGeeks' && isArticlePage() ? [extractArticle()]
+      : SOURCE === 'Reddit' ? [extractRedditThread()].filter(Boolean)
+      : extractExperiences();
     const questions = extractQuestions();
     const seen = new Map(questions.map(q => [q.text, q]));
     experiences.forEach(xp => xp.questions.forEach(q => {
@@ -317,8 +320,8 @@
   function looksBlocked() {
     const title = document.title.toLowerCase();
     const t = document.body ? document.body.innerText.slice(0, 3000).toLowerCase() : '';
-    return /just a moment|attention required|access denied|help us protect/.test(title)
-      || /verify you are human|unusual traffic|checking your browser|help us protect glassdoor|press (and|&) hold/.test(t);
+    return /just a moment|attention required|access denied|help us protect|security check|blocked/.test(title)
+      || /verify you are human|unusual traffic|checking your browser|help us protect glassdoor|press (and|&) hold|additional verification required|are you a robot|complete the security check/.test(t);
   }
 
   // A real sign-in wall: a login URL, or a visible dialog asking to sign in. Plain "Sign in"
@@ -367,6 +370,61 @@
       }
     }
     return null;
+  }
+
+  // ---------- Indeed company pages ----------
+  // Indeed company slugs are usually the name in Title-Case with dashes: /cmp/Target-Corporation, /cmp/Target
+  function indeedGuesses(company) {
+    const words = company.replace(/[^A-Za-z0-9 &]/g, ' ').split(/\s+/).filter(Boolean)
+      .map(w => w.length <= 4 && w === w.toUpperCase() ? w : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+    const full = words.join('-');
+    const first = words[0];
+    return [...new Set([full, first].filter(Boolean))].map(slg => `${location.origin}/cmp/${slg}/interviews`);
+  }
+
+  // ---------- Reddit (old.reddit.com) ----------
+  function redditThreadLinks(company) {
+    const want = slug(company).split('-')[0];
+    const seen = new Set();
+    return [...document.querySelectorAll('a.search-title, a.title, a[data-event-action="title"]')]
+      .filter(a => {
+        const h = a.href.split('?')[0];
+        const t = (a.textContent || '').toLowerCase();
+        if (!/\/comments\//.test(h) || seen.has(h)) return false;
+        if (!t.includes(want) || !/interview|hiring|offer|round|placement|recruit|selected|rejected|onsite|\boa\b|assessment|experience/.test(t)) return false;
+        seen.add(h);
+        return true;
+      })
+      .map(a => a.href.split('?')[0].replace('://www.reddit.com', '://old.reddit.com'));
+  }
+
+  function extractRedditThread() {
+    const thing = document.querySelector('#siteTable .thing.link') || document.querySelector('.thing.link');
+    if (!thing) return null;
+    const titleEl = thing.querySelector('a.title');
+    const body = thing.querySelector('.usertext-body');
+    const bodyText = body ? (body.innerText || '').trim().slice(0, 4000) : '';
+    const comments = [...document.querySelectorAll('.commentarea > .sitetable > .thing.comment')]
+      .map(c => {
+        const entry = c.querySelector(':scope > .entry');
+        const text = entry && entry.querySelector('.usertext-body') ? entry.querySelector('.usertext-body').innerText.trim() : '';
+        const scoreEl = entry && entry.querySelector('.score.unvoted');
+        const score = parseInt((scoreEl && (scoreEl.getAttribute('title') || scoreEl.textContent)) || '0', 10) || 0;
+        return { text: text.slice(0, 1500), score };
+      })
+      .filter(c => c.text && !/^\[(deleted|removed)\]$/.test(c.text))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8);
+    const time = thing.querySelector('time');
+    const questions = (bodyText.match(/[^.!?\n]{12,300}\?/g) || []).map(t => ({ text: t.trim(), answers: [] })).slice(0, 15);
+    return {
+      role: clean(titleEl && titleEl.textContent), date: time ? (time.getAttribute('datetime') || '').slice(0, 10) : '',
+      location: thing.dataset.subreddit ? 'r/' + thing.dataset.subreddit : '',
+      outcome: '', experience: '', difficulty: '', application: '', process: bodyText, rounds: [], questions, tips: '',
+      discussion: comments, score: parseInt(thing.dataset.score || '0', 10) || 0,
+      comments: parseInt(thing.dataset.commentsCount || '0', 10) || 0,
+      url: location.href.split('?')[0].replace('://old.reddit.com', '://www.reddit.com')
+    };
   }
 
   // ---------- article sources (GeeksforGeeks interview experiences) ----------
@@ -460,6 +518,34 @@
 
     const fail = (status) => send({ type: 'research:result', status, url: location.href, detail: pageDetail() });
     if (looksBlocked()) return fail('blocked');
+
+    // Reddit (old.reddit.com, plain HTML): queue the best threads from search, then read each one
+    if (SOURCE === 'Reddit') {
+      if (/\/comments\//.test(location.pathname)) {
+        const xp = extractRedditThread();
+        if (!xp) return send({ type: 'research:partial', payload: { questions: [], reviews: [], experiences: [] }, url: location.href });
+        const payload = { source: SOURCE, url: location.href, company_name: job.company,
+                          questions: xp.questions.map(q => ({ ...q, role: xp.role })), reviews: [], experiences: [xp] };
+        return send({ type: 'research:partial', payload, url: location.href });
+      }
+      const threads = redditThreadLinks(job.company);
+      if (threads.length) return send({ type: 'research:queue', urls: threads.slice(0, 4), step: `reading ${Math.min(threads.length, 4)} threads` });
+      return fail(looksLikeLoginWall() ? 'login' : 'not-found');
+    }
+
+    // Indeed: the company page may be missing from search; try its usual address directly
+    if (SOURCE === 'Indeed') {
+      const guesses = indeedGuesses(job.company);
+      const notFoundPage = /not found|page doesn.t exist|can.t find|404/i.test(document.title + ' ' + (document.body ? document.body.innerText.slice(0, 800) : ''));
+      if (isInterviewPage() && notFoundPage) {
+        const next = guesses.find(u => !location.href.startsWith(u));
+        if (next) return send({ type: 'research:navigate', url: next, step: 'trying another company page' });
+        return fail('not-found');
+      }
+      if (!isInterviewPage() && !findInterviewUrl(job.company)) {
+        if (guesses[0]) return send({ type: 'research:navigate', url: guesses[0], step: 'opening company page' });
+      }
+    }
 
     // GeeksforGeeks: queue a few interview-experience articles, then read each one
     if (SOURCE === 'GeeksforGeeks') {

@@ -6,7 +6,7 @@
 //  * Tab sources (Glassdoor, AmbitionBox, Indeed, GeeksforGeeks): the company's pages open in a
 //    background tab of the user's own signed-in browser, content.js reads them, the tab closes.
 //    Limits: at most MAX_HOPS navigations plus MAX_ARTICLES article pages per site, no pagination.
-//  * Reddit: public JSON listing + the top threads' comments (a handful of requests, no login).
+//  * Reddit: old.reddit.com search, then up to MAX_ARTICLES threads with their top comments.
 const MAX_HOPS = 3;
 const MAX_ARTICLES = 4;
 const JOB_TIMEOUT_MS = 60000;
@@ -16,9 +16,11 @@ const START_URL = {
   Glassdoor: (c) => `https://www.glassdoor.co.in/Search/results.htm?keyword=${encodeURIComponent(c)}`,
   AmbitionBox: (c) => `https://www.ambitionbox.com/search?q=${encodeURIComponent(c)}`,
   Indeed: (c) => `https://in.indeed.com/companies/search?q=${encodeURIComponent(c)}`,
-  GeeksforGeeks: (c) => `https://www.geeksforgeeks.org/search/?gq=${encodeURIComponent(c + ' interview experience')}`
+  GeeksforGeeks: (c) => `https://www.geeksforgeeks.org/search/?gq=${encodeURIComponent(c + ' interview experience')}`,
+  // old.reddit.com is plain HTML: search, then read the top threads like articles
+  Reddit: (c) => `https://old.reddit.com/search?q=${encodeURIComponent(c + ' interview')}&sort=relevance&t=all`
 };
-const API_SOURCES = { Reddit: pullReddit };
+const API_SOURCES = {};
 
 // jobs live in session storage because the worker can be suspended between page loads
 async function getJobs() {
@@ -79,44 +81,6 @@ async function runApiSource(site, company, uiTabId) {
   } catch (e) {
     notifyUi(job, 'error', { detail: String(e.message || e) });
   }
-}
-
-// ---------- Reddit: threads about the company's interviews, with top comments ----------
-async function pullReddit(company, progress) {
-  const word = company.toLowerCase().split(/\s+/)[0];
-  const q = encodeURIComponent(`${company} interview`);
-  const res = await fetch(`https://www.reddit.com/search.json?q=${q}&sort=relevance&t=all&limit=25&type=link`, { credentials: 'include' });
-  if (!res.ok) throw new Error(`Reddit search returned ${res.status}`);
-  const listing = await res.json();
-  const posts = (listing.data && listing.data.children || []).map(c => c.data)
-    .filter(p => !p.over_18 && (p.title + ' ' + p.selftext).toLowerCase().includes(word)
-      && /interview|hiring|offer|round|placement|recruit|selected|rejected|onsite|oa\b|assessment/i.test(p.title + ' ' + p.selftext))
-    .slice(0, 6);
-
-  const payload = { source: 'Reddit', url: `https://www.reddit.com/search/?q=${q}`, company_name: company,
-                    questions: [], reviews: [], experiences: [] };
-  for (let i = 0; i < posts.length; i++) {
-    const p = posts[i];
-    progress(`reading thread ${i + 1} of ${posts.length}`);
-    let discussion = [];
-    try {
-      const t = await (await fetch(`https://www.reddit.com/comments/${p.id}.json?limit=50&depth=1&sort=top`, { credentials: 'include' })).json();
-      discussion = (t[1] && t[1].data.children || [])
-        .filter(c => c.kind === 't1' && c.data.body && !/^\[(deleted|removed)\]$/.test(c.data.body))
-        .map(c => ({ text: c.data.body.slice(0, 1500), score: c.data.score }))
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 8);
-    } catch (e) { /* thread unavailable: keep the post itself */ }
-    const body = (p.selftext || '').slice(0, 4000);
-    const questions = (body.match(/[^.!?\n]{12,300}\?/g) || []).map(s => ({ text: s.trim(), answers: [] })).slice(0, 15);
-    payload.experiences.push({
-      role: p.title, date: new Date(p.created_utc * 1000).toISOString().slice(0, 10), location: 'r/' + p.subreddit,
-      outcome: '', experience: '', difficulty: '', application: '', process: body, rounds: [], questions, tips: '',
-      discussion, score: p.score, comments: p.num_comments, url: 'https://www.reddit.com' + p.permalink
-    });
-    payload.questions.push(...questions.map(q2 => ({ ...q2, role: p.title })));
-  }
-  return payload;
 }
 
 // Hands a manual capture to every open Prepify tab. Returns how many tabs received it.
@@ -226,7 +190,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== 'save-selection' || !info.selectionText) return;
   const host = new URL(tab.url).hostname;
   const source = host.includes('ambitionbox') ? 'AmbitionBox' : host.includes('glassdoor') ? 'Glassdoor'
-    : host.includes('indeed') ? 'Indeed' : host.includes('geeksforgeeks') ? 'GeeksforGeeks' : host;
+    : host.includes('indeed') ? 'Indeed' : host.includes('geeksforgeeks') ? 'GeeksforGeeks'
+    : host.includes('reddit') ? 'Reddit' : host;
   const n = await sendToApp({ source, url: tab.url, questions: [{ text: info.selectionText.trim() }] });
   const msg = n ? 'Sent to Prepify' : 'Open Prepify (localhost:5000) in a tab first';
   chrome.tabs.sendMessage(tab.id, { type: 'toast', text: msg }).catch(() => {});

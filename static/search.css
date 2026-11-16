@@ -322,6 +322,7 @@ a:hover { text-decoration: underline; }
 .sc-status .spinner { margin-top: 4px; }
 .sc-status.working { color: var(--accent); }
 .sc-status.done { color: var(--good); }
+.sc-detail { font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sc-foot { margin-top: auto; font-size: 12px; color: var(--faint); }
 
 /* ---------- dedicated site area ---------- */
