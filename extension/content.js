@@ -44,14 +44,34 @@
   }
 
   // ---------- extractors ----------
+  // Answers shown under a question: an "Answer"/"3 Answers"/"Ans" label near it, followed by the text.
+  const ANSWER_RE = /^(\d+\s+)?(answers?|interview answers?|ans)$/i;
+  function answersNear(label) {
+    let el = label.parentElement;
+    for (let i = 0; i < 5 && el && el !== document.body; i++, el = el.parentElement) {
+      const labels = findLabels(el, ANSWER_RE);
+      if (labels.length) {
+        return labels.map(valueAfter)
+          .filter(a => a && a.length > 3 && a.length < 4000 && !/^(add|answer|write)( an?)? (answer|question)/i.test(a));
+      }
+    }
+    return [];
+  }
+
   function extractQuestions() {
     const out = [];
-    const seen = new Set();
-    const add = (text) => {
+    const seen = new Map();
+    const add = (text, answers = []) => {
       text = clean(text);
-      if (text.length < 8 || text.length > 1500 || seen.has(text)) return;
-      seen.add(text);
-      out.push({ text });
+      if (text.length < 8 || text.length > 1500) return;
+      if (seen.has(text)) {               // same question twice on a page: keep all answers
+        const q = seen.get(text);
+        answers.forEach(a => { if (!q.answers.includes(a)) q.answers.push(a); });
+        return;
+      }
+      const q = { text, answers: [...new Set(answers.map(clean))] };
+      seen.set(text, q);
+      out.push(q);
     };
 
     // Pattern 1: an "Interview Questions" / "Question" label followed by the question text.
@@ -60,14 +80,18 @@
       if (!v) return;
       // The value may hold several numbered questions: "Q1. ... Q2. ..." or "1. ... 2. ..."
       const parts = v.split(/(?:^|\s)(?:Q\s?\d+[.):]|\d+[.)])\s+/).filter(Boolean);
-      (parts.length > 1 ? parts : [v]).forEach(add);
+      if (parts.length > 1) parts.forEach(p => add(p));
+      else add(v, answersNear(label));
     });
 
-    // Pattern 2: elements that already read like "Q1. text".
+    // Pattern 2: elements that read like "Q1. text", optionally followed by "A1. text" / "Ans: text".
     document.querySelectorAll('li, p, div').forEach(el => {
       if (el.children.length > 1) return;
       const m = clean(el.textContent).match(/^Q\s?\d+[.):]\s*(.{10,})$/i);
-      if (m) add(m[1]);
+      if (!m) return;
+      const next = el.nextElementSibling && clean(el.nextElementSibling.textContent);
+      const a = next && next.match(/^(?:A\s?\d*[.):]|Ans(?:wer)?\s*[.:-])\s*(.+)$/i);
+      add(m[1], a ? [a[1]] : []);
     });
 
     return out;

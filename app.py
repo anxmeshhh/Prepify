@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import sqlite3
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, g
@@ -99,6 +100,9 @@ def init_db():
         qcols = [r['name'] for r in c.execute('PRAGMA table_info(questions)').fetchall()]
         if 'url' not in qcols:
             c.execute('ALTER TABLE questions ADD COLUMN url TEXT')
+        if 'answers' not in qcols:
+            # JSON list of answers shown on the source site for this question
+            c.execute('ALTER TABLE questions ADD COLUMN answers TEXT')
         db.commit()
 
 
@@ -334,14 +338,27 @@ def capture():
         if not text:
             continue
         role_id = find_or_create_role(db, company_id, it.get('role'))
-        if db.execute('SELECT 1 FROM questions WHERE role_id = ? AND text = ?', (role_id, text)).fetchone():
+        answers = it.get('answers') or []
+        if isinstance(answers, str):
+            answers = [answers]
+        answers = [a.strip() for a in answers if isinstance(a, str) and a.strip()]
+
+        # the same question is kept once per source site, so each site's box shows its own copy
+        existing = db.execute('SELECT id, answers FROM questions WHERE role_id = ? AND text = ? AND source = ?',
+                              (role_id, text, source)).fetchone()
+        if existing:
+            old = json.loads(existing['answers'] or '[]')
+            merged = old + [a for a in answers if a not in old]
+            if merged != old:
+                db.execute('UPDATE questions SET answers = ? WHERE id = ?', (json.dumps(merged), existing['id']))
             skipped += 1
             continue
         db.execute(
-            '''INSERT INTO questions (role_id, round_type, category, text, topic, difficulty, source, tags, created_at, url)
-               VALUES (?,?,?,?,?,?,?,?,?,?)''',
+            '''INSERT INTO questions (role_id, round_type, category, text, topic, difficulty, source, tags, created_at, url, answers)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
             (role_id, it.get('round_type') or 'Interview', it.get('category') or 'Other', text,
-             it.get('topic'), it.get('difficulty'), source, it.get('tags'), now, url))
+             it.get('topic'), it.get('difficulty'), source, it.get('tags'), now, url,
+             json.dumps(answers) if answers else None))
         added_q += 1
 
     for it in d.get('reviews', []):
@@ -377,6 +394,7 @@ for frequently from get give hiring how i in interview interviews is job list me
 please prepare preparation process question questions recruitment role round rounds should show study
 tell the their to topics want what which with
 hr technical coding reviews review culture salary salaries rating ratings
+into join joining clear clearing cracking placement placements campus off drive fresher freshers
 '''.split())
 
 ROLE_PATTERNS = [
@@ -384,6 +402,28 @@ ROLE_PATTERNS = [
     r'\b(?:as|for) (?:an? |the )?((?:associate |senior |junior |lead |staff )?'
     r'(?:software|data|product|business|system|systems|full stack|frontend|backend|devops|cloud|qa|test)'
     r'[\w\s\-]*?(?:engineer|analyst|developer|manager|scientist|consultant|intern))\b',
+]
+
+# (regex on the original-case query, role name). Longer patterns first. "GET" must be upper case
+# so the English word "get" is not mistaken for Graduate Engineer Trainee.
+ROLE_ALIASES = [
+    (r'(?i)\bgenc\s+(next|elevate|pro)\b', None),
+    (r'(?i)\bspecialist programmer\b', 'Specialist Programmer'),
+    (r'(?i)\bpower programmer\b', 'Power Programmer'),
+    (r'(?i)\bsde[\s\-]?([123])\b', None),
+    (r'(?i)\bsde\b', 'Software Development Engineer'),
+    (r'(?i)\base\b', 'Associate Software Engineer'),
+    (r'(?i)\bsse\b', 'Senior Software Engineer'),
+    (r'(?i)\bswe\b', 'Software Engineer'),
+    (r'(?i)\bmts\b', 'Member of Technical Staff'),
+    (r'(?i)\bdse\b', 'Digital Specialist Engineer'),
+    (r'\bGET\b', 'Graduate Engineer Trainee'),
+    (r'(?i)\bninja\b', 'Ninja'),
+    (r'(?i)\bdigital\b', 'Digital'),
+    (r'(?i)\bprime\b', 'Prime'),
+    (r'(?i)\bgenc\b', 'GenC'),
+    (r'(?i)\belite\b', 'Elite'),
+    (r'(?i)\bturbo\b', 'Turbo'),
 ]
 
 INTENT_WORDS = {
@@ -415,6 +455,18 @@ def parse_query(q):
             low = low[:start] + ' ' + low[m.end():]
             original = original[:start] + ' ' + original[m.end():]
             break
+
+    # Abbreviated roles (ASE, SDE...) and campus hiring tracks (TCS Ninja, Cognizant GenC...)
+    if not role:
+        for pat, name in ROLE_ALIASES:
+            m = re.search(pat, original)
+            if m:
+                role = name or ' '.join(
+                    'SDE' if w.lower() == 'sde' else 'GenC' if w.lower() == 'genc' else w.capitalize()
+                    for w in re.split(r'[\s\-]+', m.group(0)))
+                low = low[:m.start()] + ' ' + low[m.end():]
+                original = original[:m.start()] + ' ' + original[m.end():]
+                break
 
     intents = [k for k, words in INTENT_WORDS.items() if any(w in low for w in words)] or ['questions']
 
@@ -471,7 +523,11 @@ def search():
         rows = role_rows or db.execute(sql + ' ORDER BY q.created_at DESC', args).fetchall()
     else:
         rows = db.execute(sql + ' ORDER BY q.created_at DESC', args).fetchall()
-    result['questions'] = [dict(r) for r in rows]
+    result['questions'] = []
+    for r in rows:
+        q = dict(r)
+        q['answers'] = json.loads(q['answers']) if q.get('answers') else []
+        result['questions'].append(q)
     result['reviews'] = [dict(r) for r in db.execute(
         'SELECT * FROM reviews WHERE company_id = ? ORDER BY created_at DESC', (c['id'],)).fetchall()]
     return jsonify(result)
