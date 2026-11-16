@@ -1,396 +1,31 @@
+"""Prepify server.
+
+Stateless by design: there is no database. The server only
+  * understands search queries (company, role, what the user wants), and
+  * handles optional "Sign in with Google" for the Prepify session.
+Everything pulled from Glassdoor / AmbitionBox lives only in the user's browser tab
+(sessionStorage) and disappears when the tab is closed.
+"""
 import os
 import re
-import json
-import sqlite3
-from datetime import datetime
-from flask import Flask, render_template, request, jsonify, g
+import secrets
+
+from flask import Flask, jsonify, render_template, request, session
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, 'data', 'interview.db')
+# Sessions are signed cookies, not server storage. Without PREPIFY_SECRET a fresh key is made
+# on every start, which simply signs everyone out after a restart.
+app.secret_key = os.environ.get('PREPIFY_SECRET') or secrets.token_hex(32)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+)
+
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '').strip()
 
 
-def get_db():
-    db = getattr(g, '_database', None)
-    if db is None:
-        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-        db = g._database = sqlite3.connect(DB_PATH)
-        db.row_factory = sqlite3.Row
-    return db
-
-
-@app.teardown_appcontext
-def close_connection(exception):
-    db = getattr(g, '_database', None)
-    if db is not None:
-        db.close()
-
-
-def init_db():
-    with app.app_context():
-        db = get_db()
-        c = db.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS companies (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            industry TEXT,
-            size TEXT,
-            location TEXT,
-            website TEXT,
-            notes TEXT,
-            created_at TEXT
-        )''')
-        c.execute('''CREATE TABLE IF NOT EXISTS roles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            company_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            level TEXT,
-            department TEXT,
-            description TEXT,
-            created_at TEXT,
-            FOREIGN KEY (company_id) REFERENCES companies(id)
-        )''')
-        c.execute('''CREATE TABLE IF NOT EXISTS questions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            role_id INTEGER NOT NULL,
-            round_type TEXT,
-            category TEXT,
-            text TEXT NOT NULL,
-            topic TEXT,
-            difficulty TEXT,
-            source TEXT,
-            tags TEXT,
-            created_at TEXT,
-            FOREIGN KEY (role_id) REFERENCES roles(id)
-        )''')
-        c.execute('''CREATE TABLE IF NOT EXISTS answers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            question_id INTEGER NOT NULL,
-            user_answer TEXT,
-            code TEXT,
-            language TEXT,
-            time_spent INTEGER,
-            self_rating INTEGER,
-            feedback TEXT,
-            score REAL,
-            created_at TEXT,
-            FOREIGN KEY (question_id) REFERENCES questions(id)
-        )''')
-        c.execute('''CREATE TABLE IF NOT EXISTS reviews (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            company_id INTEGER NOT NULL,
-            source TEXT,
-            rating REAL,
-            title TEXT,
-            pros TEXT,
-            cons TEXT,
-            body TEXT,
-            job_title TEXT,
-            review_date TEXT,
-            url TEXT,
-            created_at TEXT,
-            FOREIGN KEY (company_id) REFERENCES companies(id)
-        )''')
-        c.execute('''CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )''')
-        # lightweight migration for existing DBs
-        qcols = [r['name'] for r in c.execute('PRAGMA table_info(questions)').fetchall()]
-        if 'url' not in qcols:
-            c.execute('ALTER TABLE questions ADD COLUMN url TEXT')
-        if 'answers' not in qcols:
-            # JSON list of answers shown on the source site for this question
-            c.execute('ALTER TABLE questions ADD COLUMN answers TEXT')
-        db.commit()
-
-
-# ---------- Companies ----------
-@app.route('/api/companies', methods=['GET'])
-def list_companies():
-    rows = get_db().execute('SELECT * FROM companies ORDER BY created_at DESC').fetchall()
-    return jsonify([dict(r) for r in rows])
-
-
-@app.route('/api/companies', methods=['POST'])
-def add_company():
-    d = request.get_json() or {}
-    now = datetime.utcnow().isoformat()
-    cur = get_db().execute(
-        'INSERT INTO companies (name, industry, size, location, website, notes, created_at) VALUES (?,?,?,?,?,?,?)',
-        (d.get('name'), d.get('industry'), d.get('size'), d.get('location'), d.get('website'), d.get('notes'), now)
-    )
-    get_db().commit()
-    return jsonify({'id': cur.lastrowid}), 201
-
-
-# ---------- Roles ----------
-@app.route('/api/roles', methods=['GET'])
-def list_roles():
-    company_id = request.args.get('company_id')
-    if company_id:
-        rows = get_db().execute(
-            'SELECT * FROM roles WHERE company_id = ? ORDER BY created_at DESC', (company_id,)
-        ).fetchall()
-    else:
-        rows = get_db().execute('SELECT * FROM roles ORDER BY created_at DESC').fetchall()
-    return jsonify([dict(r) for r in rows])
-
-
-@app.route('/api/roles', methods=['POST'])
-def add_role():
-    d = request.get_json() or {}
-    now = datetime.utcnow().isoformat()
-    cur = get_db().execute(
-        'INSERT INTO roles (company_id, title, level, department, description, created_at) VALUES (?,?,?,?,?,?)',
-        (d.get('company_id'), d.get('title'), d.get('level'), d.get('department'), d.get('description'), now)
-    )
-    get_db().commit()
-    return jsonify({'id': cur.lastrowid}), 201
-
-
-# ---------- Questions ----------
-@app.route('/api/questions', methods=['GET'])
-def list_questions():
-    role_id = request.args.get('role_id')
-    if role_id:
-        rows = get_db().execute(
-            'SELECT * FROM questions WHERE role_id = ? ORDER BY created_at DESC', (role_id,)
-        ).fetchall()
-    else:
-        rows = get_db().execute('SELECT * FROM questions ORDER BY created_at DESC').fetchall()
-    return jsonify([dict(r) for r in rows])
-
-
-@app.route('/api/questions', methods=['POST'])
-def add_question():
-    d = request.get_json() or {}
-    now = datetime.utcnow().isoformat()
-    cur = get_db().execute(
-        '''INSERT INTO questions (role_id, round_type, category, text, topic, difficulty, source, tags, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?)''',
-        (d.get('role_id'), d.get('round_type'), d.get('category'), d.get('text'),
-         d.get('topic'), d.get('difficulty'), d.get('source'), d.get('tags'), now)
-    )
-    get_db().commit()
-    return jsonify({'id': cur.lastrowid}), 201
-
-
-# ---------- Import ----------
-@app.route('/api/import/questions', methods=['POST'])
-def import_questions():
-    d = request.get_json() or {}
-    items = d.get('items', [])
-    role_id = d.get('role_id')
-    if not items:
-        return jsonify({'error': 'no items provided'}), 400
-    if not role_id:
-        return jsonify({'error': 'role_id is required'}), 400
-    db = get_db()
-    c = db.cursor()
-    now = datetime.utcnow().isoformat()
-    count = 0
-    for item in items:
-        c.execute(
-            '''INSERT INTO questions (role_id, round_type, category, text, topic, difficulty, source, tags, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?)''',
-            (role_id, item.get('round_type'), item.get('category'), item.get('text'),
-             item.get('topic'), item.get('difficulty'), item.get('source'), item.get('tags'), now)
-        )
-        count += 1
-    db.commit()
-    return jsonify({'imported': count}), 201
-
-
-# ---------- Answers ----------
-@app.route('/api/answers', methods=['GET'])
-def list_answers():
-    question_id = request.args.get('question_id')
-    if question_id:
-        rows = get_db().execute(
-            'SELECT * FROM answers WHERE question_id = ? ORDER BY created_at DESC', (question_id,)
-        ).fetchall()
-    else:
-        rows = get_db().execute('SELECT * FROM answers ORDER BY created_at DESC').fetchall()
-    return jsonify([dict(r) for r in rows])
-
-
-@app.route('/api/answers', methods=['POST'])
-def add_answer():
-    d = request.get_json() or {}
-    now = datetime.utcnow().isoformat()
-    cur = get_db().execute(
-        '''INSERT INTO answers (question_id, user_answer, code, language, time_spent, self_rating, feedback, score, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?)''',
-        (d.get('question_id'), d.get('user_answer'), d.get('code'), d.get('language'),
-         d.get('time_spent'), d.get('self_rating'), d.get('feedback'), d.get('score'), now)
-    )
-    get_db().commit()
-    return jsonify({'id': cur.lastrowid}), 201
-
-
-# ---------- Dashboard ----------
-@app.route('/api/dashboard', methods=['GET'])
-def dashboard():
-    db = get_db()
-    companies = db.execute('SELECT COUNT(*) as c FROM companies').fetchone()['c']
-    roles = db.execute('SELECT COUNT(*) as c FROM roles').fetchone()['c']
-    questions = db.execute('SELECT COUNT(*) as c FROM questions').fetchone()['c']
-    answers = db.execute('SELECT COUNT(*) as c FROM answers').fetchone()['c']
-    reviews = db.execute('SELECT COUNT(*) as c FROM reviews').fetchone()['c']
-    by_category = db.execute('SELECT category, COUNT(*) as c FROM questions GROUP BY category').fetchall()
-    return jsonify({
-        'companies': companies,
-        'roles': roles,
-        'questions': questions,
-        'answers': answers,
-        'reviews': reviews,
-        'by_category': [dict(r) for r in by_category]
-    })
-
-
-# ---------- Active company (set by the app, read by the browser extension) ----------
-@app.route('/api/active', methods=['GET'])
-def get_active():
-    db = get_db()
-    row = db.execute("SELECT value FROM settings WHERE key='active_company_id'").fetchone()
-    if not row:
-        return jsonify({'company': None})
-    c = db.execute('SELECT id, name FROM companies WHERE id = ?', (row['value'],)).fetchone()
-    return jsonify({'company': dict(c) if c else None})
-
-
-@app.route('/api/active', methods=['POST'])
-def set_active():
-    d = request.get_json() or {}
-    db = get_db()
-    company_id = d.get('company_id')
-    name = (d.get('name') or '').strip()
-    if not company_id and name:
-        company_id = find_or_create_company(db, name)
-    if not company_id:
-        return jsonify({'error': 'company_id or name required'}), 400
-    db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('active_company_id', ?)", (str(company_id),))
-    db.commit()
-    c = db.execute('SELECT id, name FROM companies WHERE id = ?', (company_id,)).fetchone()
-    return jsonify({'company': dict(c)})
-
-
-# ---------- Reviews ----------
-@app.route('/api/reviews', methods=['GET'])
-def list_reviews():
-    company_id = request.args.get('company_id')
-    q = 'SELECT r.*, c.name AS company_name FROM reviews r JOIN companies c ON c.id = r.company_id'
-    if company_id:
-        rows = get_db().execute(q + ' WHERE r.company_id = ? ORDER BY r.created_at DESC', (company_id,)).fetchall()
-    else:
-        rows = get_db().execute(q + ' ORDER BY r.created_at DESC').fetchall()
-    return jsonify([dict(r) for r in rows])
-
-
-# ---------- Capture (called by the browser extension) ----------
-def find_or_create_company(db, name):
-    row = db.execute('SELECT id FROM companies WHERE lower(name) = lower(?)', (name.strip(),)).fetchone()
-    if row:
-        return row['id']
-    cur = db.execute('INSERT INTO companies (name, created_at) VALUES (?, ?)',
-                     (name.strip(), datetime.utcnow().isoformat()))
-    return cur.lastrowid
-
-
-def find_or_create_role(db, company_id, title):
-    title = (title or 'General').strip() or 'General'
-    row = db.execute('SELECT id FROM roles WHERE company_id = ? AND lower(title) = lower(?)',
-                     (company_id, title)).fetchone()
-    if row:
-        return row['id']
-    cur = db.execute('INSERT INTO roles (company_id, title, created_at) VALUES (?,?,?)',
-                     (company_id, title, datetime.utcnow().isoformat()))
-    return cur.lastrowid
-
-
-@app.route('/api/capture', methods=['POST'])
-def capture():
-    # Custom header forces a CORS preflight, so random websites can't write to this local API.
-    if request.headers.get('X-Prepify') != '1':
-        return jsonify({'error': 'forbidden'}), 403
-    d = request.get_json() or {}
-    db = get_db()
-    now = datetime.utcnow().isoformat()
-    source = d.get('source') or 'Unknown'
-    url = d.get('url')
-
-    company_id = d.get('company_id')
-    if not company_id and d.get('research') and d.get('company_name'):
-        # pulled by a Prepify search: file it under the company that was searched
-        company_id = find_or_create_company(db, d['company_name'])
-    if not company_id:
-        active = db.execute("SELECT value FROM settings WHERE key='active_company_id'").fetchone()
-        if active:
-            company_id = int(active['value'])
-        elif d.get('company_name'):
-            company_id = find_or_create_company(db, d['company_name'])
-    if not company_id:
-        return jsonify({'error': 'no company: search one in Prepify first'}), 400
-
-    added_q = added_r = skipped = 0
-
-    for it in d.get('questions', []):
-        text = (it.get('text') or '').strip()
-        if not text:
-            continue
-        role_id = find_or_create_role(db, company_id, it.get('role'))
-        answers = it.get('answers') or []
-        if isinstance(answers, str):
-            answers = [answers]
-        answers = [a.strip() for a in answers if isinstance(a, str) and a.strip()]
-
-        # the same question is kept once per source site, so each site's box shows its own copy
-        existing = db.execute('SELECT id, answers FROM questions WHERE role_id = ? AND text = ? AND source = ?',
-                              (role_id, text, source)).fetchone()
-        if existing:
-            old = json.loads(existing['answers'] or '[]')
-            merged = old + [a for a in answers if a not in old]
-            if merged != old:
-                db.execute('UPDATE questions SET answers = ? WHERE id = ?', (json.dumps(merged), existing['id']))
-            skipped += 1
-            continue
-        db.execute(
-            '''INSERT INTO questions (role_id, round_type, category, text, topic, difficulty, source, tags, created_at, url, answers)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
-            (role_id, it.get('round_type') or 'Interview', it.get('category') or 'Other', text,
-             it.get('topic'), it.get('difficulty'), source, it.get('tags'), now, url,
-             json.dumps(answers) if answers else None))
-        added_q += 1
-
-    for it in d.get('reviews', []):
-        body = (it.get('body') or '').strip()
-        pros = (it.get('pros') or '').strip()
-        cons = (it.get('cons') or '').strip()
-        title = (it.get('title') or '').strip()
-        if not (body or pros or cons or title):
-            continue
-        dup = db.execute(
-            "SELECT 1 FROM reviews WHERE company_id=? AND source=? AND ifnull(title,'')=? "
-            "AND ifnull(pros,'')=? AND ifnull(cons,'')=? AND ifnull(body,'')=?",
-            (company_id, source, title, pros, cons, body)).fetchone()
-        if dup:
-            skipped += 1
-            continue
-        db.execute(
-            '''INSERT INTO reviews (company_id, source, rating, title, pros, cons, body, job_title, review_date, url, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
-            (company_id, source, it.get('rating'), title, pros, cons, body,
-             it.get('job_title'), it.get('date'), url, now))
-        added_r += 1
-
-    db.commit()
-    return jsonify({'questions_added': added_q, 'reviews_added': added_r, 'duplicates_skipped': skipped,
-                    'company_id': company_id}), 201
-
-
-# ---------- Search ----------
+# ---------- Query understanding ----------
 STOPWORDS = set('''
 a about all an and any are as asked at be can common company crack do expect experience experiences
 for frequently from get give hiring how i in interview interviews is job list me most my of on or
@@ -438,7 +73,11 @@ INTENT_WORDS = {
 }
 
 
-def parse_query(q):
+def parse_query(q, known=()):
+    """Split a free-text query into company, role and intents.
+
+    `known` = company names the browser already has data for; a match wins over guessing.
+    """
     original = ' '.join(q.split())
     low = original.lower()
 
@@ -473,9 +112,6 @@ def parse_query(q):
 
     intents = [k for k, words in INTENT_WORDS.items() if any(w in low for w in words)] or ['questions']
 
-    # Company = a saved company named in the query, else the longest run of non-filler words.
-    db = get_db()
-    known = [r['name'] for r in db.execute('SELECT name FROM companies').fetchall()]
     hits = [n for n in known if n and re.search(r'\b' + re.escape(n.lower()) + r'\b', low)]
     if hits:
         company = max(hits, key=len)
@@ -497,43 +133,51 @@ def parse_query(q):
     return {'company': company, 'role': role, 'intents': intents}
 
 
-@app.route('/api/search', methods=['GET'])
-def search():
+@app.route('/api/parse', methods=['GET'])
+def parse():
     q = (request.args.get('q') or '').strip()
     if not q:
         return jsonify({'error': 'empty query'}), 400
-    db = get_db()
-    parsed = parse_query(q)
-    result = {'query': q, 'parsed': parsed, 'company': None, 'questions': [], 'reviews': []}
-    if not parsed['company']:
-        return jsonify(result)
+    known = [k for k in request.args.getlist('known') if k][:200]
+    return jsonify({'query': q, 'parsed': parse_query(q, known)})
 
-    c = db.execute('SELECT * FROM companies WHERE lower(name) = lower(?)', (parsed['company'],)).fetchone()
-    if not c:
-        c = db.execute('SELECT * FROM companies WHERE lower(name) LIKE lower(?) ORDER BY length(name) LIMIT 1',
-                       ('%' + parsed['company'] + '%',)).fetchone()
-    if not c:
-        return jsonify(result)
-    result['company'] = dict(c)
 
-    sql = '''SELECT q.*, r.title AS role_title FROM questions q JOIN roles r ON r.id = q.role_id
-             WHERE r.company_id = ?'''
-    args = [c['id']]
-    if parsed['role']:
-        role_rows = db.execute(sql + ' AND lower(r.title) LIKE lower(?) ORDER BY q.created_at DESC',
-                               args + ['%' + parsed['role'] + '%']).fetchall()
-        result['role_matched'] = bool(role_rows)
-        rows = role_rows or db.execute(sql + ' ORDER BY q.created_at DESC', args).fetchall()
-    else:
-        rows = db.execute(sql + ' ORDER BY q.created_at DESC', args).fetchall()
-    result['questions'] = []
-    for r in rows:
-        q = dict(r)
-        q['answers'] = json.loads(q['answers']) if q.get('answers') else []
-        result['questions'].append(q)
-    result['reviews'] = [dict(r) for r in db.execute(
-        'SELECT * FROM reviews WHERE company_id = ? ORDER BY created_at DESC', (c['id'],)).fetchall()]
-    return jsonify(result)
+# ---------- Sign in with Google (optional) ----------
+def current_user():
+    return session.get('user')
+
+
+@app.route('/api/auth/config', methods=['GET'])
+def auth_config():
+    return jsonify({'google_client_id': GOOGLE_CLIENT_ID or None, 'user': current_user()})
+
+
+@app.route('/api/auth/google', methods=['POST'])
+def auth_google():
+    if not GOOGLE_CLIENT_ID:
+        return jsonify({'error': 'Google sign-in is not set up (GOOGLE_CLIENT_ID missing)'}), 503
+    credential = (request.get_json(silent=True) or {}).get('credential')
+    if not credential:
+        return jsonify({'error': 'missing credential'}), 400
+    try:
+        from google.auth.transport import requests as google_requests
+        from google.oauth2 import id_token
+        info = id_token.verify_oauth2_token(credential, google_requests.Request(), GOOGLE_CLIENT_ID)
+    except Exception:
+        return jsonify({'error': 'invalid Google sign-in'}), 401
+    if not info.get('email_verified'):
+        return jsonify({'error': 'Google account email is not verified'}), 401
+    # Only what the UI shows; the Google token itself is not kept.
+    session.clear()
+    session['user'] = {'name': info.get('name') or info.get('email'), 'email': info.get('email'),
+                       'picture': info.get('picture')}
+    return jsonify({'user': session['user']})
+
+
+@app.route('/api/auth/logout', methods=['POST'])
+def auth_logout():
+    session.clear()
+    return jsonify({'ok': True})
 
 
 # ---------- Pages ----------
@@ -541,13 +185,6 @@ def search():
 def home():
     return render_template('search.html')
 
-
-@app.route('/workspace')
-def index():
-    return render_template('index.html')
-
-
-init_db()
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

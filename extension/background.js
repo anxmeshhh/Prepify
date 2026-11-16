@@ -1,30 +1,20 @@
 // Prepify Capture — background service worker.
-// 1. Posts captured data to the local Prepify server (host_permissions avoid CORS).
-// 2. Runs "research" jobs: when the Prepify page asks, opens the company's pages on each site
-//    in a background tab of the user's own (signed-in) browser, lets content.js read them,
-//    then closes the tab and reports back to the Prepify page.
-//    Limits: only sites the user asked for, at most MAX_HOPS page loads per site, no pagination.
-const API = 'http://localhost:5000';
+// Nothing is sent to any server: captured questions, answers and reviews are handed straight
+// to the open Prepify tab, which keeps them only for that browser session.
+//
+// Research jobs: when a signed-in Prepify page asks, the worker opens the company's pages on each
+// site in a background tab of the user's own (signed-in) browser, content.js reads them, and the
+// tab is closed. Limits: only the sites asked for, at most MAX_HOPS page loads per site, no pagination.
 const MAX_HOPS = 3;
 const JOB_TIMEOUT_MS = 45000;
+const APP_URLS = ['http://localhost:5000/*', 'http://127.0.0.1:5000/*'];
 
-async function post(path, body) {
-  const res = await fetch(API + path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Prepify': '1' },
-    body: JSON.stringify(body)
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data;
-}
-
-// ---------- research jobs (kept in session storage: the worker can be suspended) ----------
 const START_URL = {
   Glassdoor: (c) => `https://www.glassdoor.co.in/Search/results.htm?keyword=${encodeURIComponent(c)}`,
   AmbitionBox: (c) => `https://www.ambitionbox.com/search?q=${encodeURIComponent(c)}`
 };
 
+// jobs live in session storage because the worker can be suspended between page loads
 async function getJobs() {
   return (await chrome.storage.session.get('jobs')).jobs || {};
 }
@@ -49,7 +39,6 @@ async function finishJob(tabId, status, extra = {}) {
 }
 
 async function startResearch(company, sites, uiTabId) {
-  try { await post('/api/active', { name: company }); } catch (e) { /* app offline: content capture will report */ }
   for (const site of sites) {
     if (!START_URL[site]) continue;
     const tab = await chrome.tabs.create({ url: START_URL[site](company), active: false });
@@ -61,13 +50,20 @@ async function startResearch(company, sites, uiTabId) {
   }
 }
 
+// Hands a manual capture to every open Prepify tab. Returns how many tabs received it.
+async function sendToApp(payload) {
+  const tabs = await chrome.tabs.query({ url: APP_URLS });
+  await Promise.all(tabs.map(t => chrome.tabs.sendMessage(t.id, { type: 'capture', payload }).catch(() => {})));
+  return tabs.length;
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const tabId = sender.tab && sender.tab.id;
 
-  if (msg.type === 'capture') {
-    post('/api/capture', msg.payload)
-      .then(r => sendResponse({ ok: true, result: r }))
-      .catch(e => sendResponse({ ok: false, error: String(e.message || e) }));
+  if (msg.type === 'capture') {               // "Save to Prepify" button on a page
+    sendToApp(msg.payload).then(n => sendResponse(n
+      ? { ok: true }
+      : { ok: false, error: 'Open Prepify (localhost:5000) in a tab first' }));
     return true;
   }
 
@@ -95,8 +91,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  if (msg.type === 'research:result') {
-    finishJob(tabId, msg.status, { added: msg.added || 0, url: msg.url, detail: msg.detail });
+  if (msg.type === 'research:result') {       // payload travels to the Prepify tab with the status
+    finishJob(tabId, msg.status, { url: msg.url, payload: msg.payload, detail: msg.detail });
     return false;
   }
 });
@@ -125,15 +121,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== 'save-selection' || !info.selectionText) return;
   const host = new URL(tab.url).hostname;
   const source = host.includes('ambitionbox') ? 'AmbitionBox' : host.includes('glassdoor') ? 'Glassdoor' : host;
-  let msg;
-  try {
-    const r = await post('/api/capture', {
-      source, url: tab.url,
-      questions: [{ text: info.selectionText.trim() }]
-    });
-    msg = r.questions_added ? 'Saved question to Prepify' : 'Already saved';
-  } catch (e) {
-    msg = 'Prepify: ' + e.message;
-  }
+  const n = await sendToApp({ source, url: tab.url, questions: [{ text: info.selectionText.trim() }] });
+  const msg = n ? 'Sent to Prepify' : 'Open Prepify (localhost:5000) in a tab first';
   chrome.tabs.sendMessage(tab.id, { type: 'toast', text: msg }).catch(() => {});
 });

@@ -13,7 +13,7 @@
 <body>
   <!-- ===== Home: centered search, like a search engine ===== -->
   <main id="home" class="home">
-    <nav class="corner"><a href="/workspace">workspace</a></nav>
+    <nav class="corner"><div class="auth" data-auth></div></nav>
     <div class="home-inner">
       <div class="wordmark"><span class="dim">prep</span>ify</div>
       <p class="tagline">interview intel for any company, with a source on every question</p>
@@ -31,7 +31,7 @@
         <button type="button" id="home-research" class="btn">research sources</button>
       </div>
 
-      <p class="promo">tip: pages you save with the prepify extension show up in your results &middot; <a href="/workspace">workspace</a></p>
+      <p class="promo" id="mode-line"></p>
       <p class="offered">try:
         <button class="example" type="button">Target Corporation interview questions</button>
         <button class="example" type="button">Accenture ASE interview process</button>
@@ -48,7 +48,7 @@
         <span class="prompt" aria-hidden="true">&gt;</span>
         <input id="top-q" name="q" />
       </form>
-      <a href="/workspace" class="toplink">workspace</a>
+      <div class="auth toplink" data-auth></div>
     </header>
 
     <nav class="filters" id="filters">
@@ -67,6 +67,24 @@
     </div>
   </div>
 
+  <!-- sign-in dialog -->
+  <div class="modal hidden" id="signin-modal" role="dialog" aria-modal="true" aria-labelledby="signin-title">
+    <div class="modal-box">
+      <h2 id="signin-title">sign in to prepify</h2>
+      <p class="modal-sub">Signing in unlocks pulling Glassdoor and AmbitionBox into Prepify. Without an account, Prepify only gives you links.</p>
+      <div id="gsi-button"></div>
+      <div id="signin-setup" class="hidden">
+        <p class="modal-sub"><b>Google sign-in isn't set up on this server yet.</b> Create an OAuth client ID
+          (Google Cloud Console → APIs &amp; Services → Credentials → OAuth client ID → Web application,
+          authorised JavaScript origin <code>http://localhost:5000</code>), then start Prepify with
+          <code>GOOGLE_CLIENT_ID=&lt;your id&gt;</code>.</p>
+      </div>
+      <p class="modal-note">Prepify keeps only your name and email for this browser session. It never sees your Glassdoor or AmbitionBox password, and nothing you pull is stored on a server.</p>
+      <button class="btn" id="signin-close">close</button>
+    </div>
+  </div>
+
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="/static/search.js"></script>
 </body>
 </html>

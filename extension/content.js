@@ -185,13 +185,11 @@
     }, (resp) => {
       btn.disabled = false;
       if (chrome.runtime.lastError || !resp) {
-        showToast('Could not reach Prepify. Is the app running on localhost:5000?');
+        showToast('Prepify extension is not responding. Reload the page and try again.');
       } else if (!resp.ok) {
         showToast('Prepify: ' + resp.error);
       } else {
-        const r = resp.result;
-        showToast(`Saved ${r.questions_added} questions, ${r.reviews_added} reviews` +
-          (r.duplicates_skipped ? ` (${r.duplicates_skipped} already saved)` : ''));
+        showToast(`Sent ${questions.length} questions and ${reviews.length} reviews to Prepify`);
       }
     });
   });
@@ -264,15 +262,10 @@
     if (!questions.length && !reviews.length) {
       return send({ type: 'research:result', status: looksLikeLoginWall() ? 'login' : 'empty', url: location.href });
     }
-    const resp = await send({
-      type: 'capture',
-      payload: { source: SOURCE, url: location.href, company_name: job.company, research: true, questions, reviews }
+    send({
+      type: 'research:result', status: 'done', url: location.href,
+      payload: { source: SOURCE, url: location.href, company_name: job.company, questions, reviews }
     });
-    if (!resp || !resp.ok) {
-      return send({ type: 'research:result', status: 'error', url: location.href, detail: resp ? resp.error : 'Prepify app not reachable' });
-    }
-    send({ type: 'research:result', status: 'done', url: location.href,
-           added: resp.result.questions_added + resp.result.reviews_added });
   }
 
   researchMode();
