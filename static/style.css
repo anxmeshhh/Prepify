@@ -1,25 +1,26 @@
-/* Prepify — minimal dark UI */
+/* Prepify workspace — OpenCode-style dark terminal theme */
 :root {
-  --bg: #0b0d12;
-  --surface: #12151c;
-  --surface-2: #181c25;
-  --border: #252a36;
-  --text: #e6e8ee;
-  --muted: #8b93a7;
-  --accent: #6d8cff;
-  --accent-hover: #8aa3ff;
-  --accent-soft: rgba(109, 140, 255, 0.12);
-  --success: #3fb97f;
-  --danger: #ef6b6b;
-  --radius: 8px;
+  --bg: #0a0a0a;
+  --surface: #141414;
+  --surface-2: #1e1e1e;
+  --border: #3c3c3c;
+  --text: #eeeeee;
+  --muted: #808080;
+  --accent: #fab283;
+  --accent-hover: #fcc6a4;
+  --accent-soft: rgba(250, 178, 131, 0.12);
+  --success: #7fd88f;
+  --danger: #e06c75;
+  --radius: 6px;
+  --mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', ui-monospace, Consolas, monospace;
   color-scheme: dark;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-  font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  font-size: 14px;
+  font-family: var(--mono);
+  font-size: 13px;
   background: var(--bg);
   color: var(--text);
   line-height: 1.55;
@@ -27,7 +28,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-a { color: var(--accent); text-decoration: none; }
+a { color: #5c9cf5; text-decoration: none; }
 a:hover { color: var(--accent-hover); text-decoration: underline; }
 
 code {
@@ -117,6 +118,7 @@ section h3 {
 
 section h2 .badge {
   font-size: 0.68rem;
+  font-family: var(--mono);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -279,3 +281,10 @@ pre { color: var(--text); }
 @media (max-width: 640px) {
   .container { padding: 0 0.85rem; }
 }
+
+/* terminal touches */
+::selection { background: var(--accent); color: var(--bg); }
+input, select, textarea { border-radius: 4px; caret-color: var(--accent); }
+.btn { border-radius: 4px; }
+.wordmark { font-weight: 700; letter-spacing: -0.04em; }
+.wordmark .dim { color: var(--muted); }

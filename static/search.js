@@ -84,7 +84,7 @@ function render(d) {
   const p = d.parsed;
   const wants = p.intents.join(', ');
   $('#understood').innerHTML = p.company
-    ? `Company <b>${esc(p.company)}</b> · Role <b>${esc(p.role || 'any')}</b> · Looking for <b>${esc(wants)}</b>`
+    ? `<span class="k">company:</span> <b>${esc(p.company)}</b> &nbsp; <span class="k">role:</span> <b>${esc(p.role || 'any')}</b> &nbsp; <span class="k">looking for:</span> <b>${esc(wants)}</b>`
     : '';
 
   if (!p.company) {
@@ -132,7 +132,7 @@ function render(d) {
 
   let n = 0;
   const sec = (kind, title, sub, body) =>
-    `<section class="section" data-kind="${kind}"><h2><span class="num">${++n}.</span>${title}</h2>${sub ? `<p class="sub">${sub}</p>` : ''}${body}</section>`;
+    `<section class="section" data-kind="${kind}"><h2><span class="num">${String(++n).padStart(2, '0')}</span>${title}</h2>${sub ? `<p class="sub">${sub}</p>` : ''}${body}</section>`;
 
   let html = '';
 
@@ -245,6 +245,14 @@ $('#home-research').onclick = async () => {
     wins.forEach(w => w && w.close());
   }
 };
+
+// "/" focuses the search box, like a terminal command palette
+document.addEventListener('keydown', (e) => {
+  if (e.key !== '/' || ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+  e.preventDefault();
+  const box = $('#results').classList.contains('hidden') ? $('#home-q') : $('#top-q');
+  box.focus(); box.select();
+});
 
 // initial load
 const initial = new URLSearchParams(location.search).get('q');
