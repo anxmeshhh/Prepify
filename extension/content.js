@@ -578,5 +578,22 @@
     });
   }
 
+  // ---------- sign-in tab: Prepify asked the user to sign in here; report when the wall is gone ----------
+  async function loginWatch() {
+    const info = await send({ type: 'login:whoami' });
+    if (!info) return;
+    btn.style.display = 'none';
+    const onAuthPage = () => /\/(login|signin|sign-in|account|auth|oauth|profile\/login|member)\b/i.test(location.pathname);
+    const cleared = () => document.body && document.body.innerText.length > 500
+      && !onAuthPage() && !looksBlocked() && !looksLikeLoginWall();
+    await settle();
+    // sign-in often finishes without a full reload, so keep checking for ~10 minutes
+    for (let i = 0; i < 200; i++) {
+      if (cleared()) { send({ type: 'login:cleared' }); return; }
+      await sleep(3000);
+    }
+  }
+
   researchMode();
+  loginWatch();
 })();

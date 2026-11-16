@@ -1,5 +1,5 @@
-// Runs on the Prepify app page. Lets the page ask the extension to pull a source, and
-// passes progress and captured data back to the page (which keeps it in sessionStorage only).
+// Runs on the Prepify app page. Lets the page ask the extension to pull a source or show a
+// sign-in page, and passes progress and captured data back (the page keeps it in sessionStorage only).
 (() => {
   document.documentElement.dataset.prepifyExt = chrome.runtime.getManifest().version;
 
@@ -7,6 +7,8 @@
     if (e.source !== window || !e.data || e.data.source !== 'prepify-page') return;
     if (e.data.type === 'research:start') {
       chrome.runtime.sendMessage({ type: 'research:start', company: e.data.company, sites: e.data.sites });
+    } else if (e.data.type === 'login:open') {
+      chrome.runtime.sendMessage({ type: 'login:open', company: e.data.company, site: e.data.site });
     }
   });
 

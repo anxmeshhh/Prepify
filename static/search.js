@@ -288,11 +288,95 @@ window.addEventListener('message', (e) => {
     return;
   }
   if (m.type !== 'research:update') return;
+  if (m.status === 'login' || m.status === 'blocked') {
+    pulls[pullKey(m.company, m.site)] = { status: m.status, detail: m.detail };
+    refreshBoxes();
+    showLoginPrompt(m.site, m.company, m.status);
+    return;
+  }
+  if (m.status === 'login-cleared') {
+    hideLoginPrompt(m.site);
+    toast(`Signed in to ${m.site}. Retrying ${m.site}…`);
+    pullSources(m.company, [m.site]);
+    return;
+  }
+  if (m.status === 'login-closed') {
+    updateLoginPrompt(m.site, 'The sign-in tab was closed. Open it again, or retry if you already signed in.');
+    return;
+  }
   let added = 0;
   if (m.status === 'done' && m.payload) added = addCapture(m.payload, m.company);
   pulls[pullKey(m.company, m.site)] = { status: m.status, step: m.step, added, detail: m.detail };
   m.status === 'done' ? rerender() : refreshBoxes();
 });
+
+// ---------- sign-in prompt: a source needs the user to sign in (or pass a check) first ----------
+const loginQueue = [];          // sites waiting for the user, shown one at a time
+
+function showLoginPrompt(site, company, reason) {
+  if (!loginQueue.some(x => x.site === site)) loginQueue.push({ site, company, reason });
+  renderLoginPrompt();
+}
+function hideLoginPrompt(site) {
+  const i = loginQueue.findIndex(x => x.site === site);
+  if (i >= 0) loginQueue.splice(i, 1);
+  renderLoginPrompt();
+}
+function updateLoginPrompt(site, note) {
+  const item = loginQueue.find(x => x.site === site);
+  if (item) { item.note = note; renderLoginPrompt(); }
+}
+
+function renderLoginPrompt() {
+  let el = $('#login-modal');
+  const item = loginQueue[0];
+  if (!item) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'login-modal';
+    el.className = 'modal';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    document.body.appendChild(el);
+  }
+  const s = siteInfo(item.site);
+  const blocked = item.reason === 'blocked';
+  el.innerHTML = `
+    <div class="modal-box login-box">
+      <div class="login-head">
+        <span class="mark big" style="--c:${s.color}">${esc(s.mark)}</span>
+        <div>
+          <h2>${blocked ? `${esc(item.site)} wants to check you're human` : `Sign in to ${esc(item.site)}`}</h2>
+          <p class="modal-sub">Needed to pull ${esc(item.site)} results for ${esc(item.company)}.</p>
+        </div>
+      </div>
+      <ol class="login-steps">
+        <li>Click <b>${blocked ? 'Open verification' : `Open ${esc(item.site)} sign-in`}</b>. It opens in the tab just to the left of Prepify.</li>
+        <li>${blocked ? 'Complete the check there.' : `Sign in there. Your password goes only to ${esc(item.site)}, never to Prepify.`}</li>
+        <li>Prepify notices when you're done, brings you back and retries ${esc(item.site)} automatically.</li>
+      </ol>
+      ${item.note ? `<p class="notice">${esc(item.note)}</p>` : ''}
+      <div class="login-actions">
+        <button class="btn primary" data-login-open>${blocked ? 'Open verification' : `Open ${esc(item.site)} sign-in`}</button>
+        <button class="btn" data-login-retry>I'm signed in, retry</button>
+        <button class="linkbtn" data-login-skip>Skip ${esc(item.site)} for now</button>
+      </div>
+      ${loginQueue.length > 1 ? `<p class="modal-note">Also waiting: ${loginQueue.slice(1).map(x => esc(x.site)).join(', ')}</p>` : ''}
+    </div>`;
+  el.querySelector('[data-login-open]').onclick = () =>
+    window.postMessage({ source: 'prepify-page', type: 'login:open', site: item.site, company: item.company }, location.origin);
+  el.querySelector('[data-login-retry]').onclick = () => { hideLoginPrompt(item.site); pullSources(item.company, [item.site]); };
+  el.querySelector('[data-login-skip]').onclick = () => hideLoginPrompt(item.site);
+}
+
+function toast(text) {
+  let t = $('#toast');
+  if (!t) { t = document.createElement('div'); t.id = 'toast'; t.className = 'toast'; t.setAttribute('role', 'status'); document.body.appendChild(t); }
+  t.textContent = text;
+  t.classList.add('show');
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => t.classList.remove('show'), 4000);
+}
 
 // ---------- routing ----------
 function showHome() {
@@ -470,8 +554,8 @@ function subjectOf(q) {
 
 const STATUS_TEXT = {
   working: 'Reading in the background…',
-  login: 'Sign-in needed. A tab for this site is open in Chrome: sign in there, then click to retry.',
-  blocked: 'The site asked to verify you\'re human. Finish it in the open tab, then click to retry.',
+  login: 'Sign-in needed. Click to sign in.',
+  blocked: 'Verification needed. Click to continue.',
   'not-found': 'Couldn\'t find an interview page. Click to retry.',
   empty: 'The page had no questions. Click to retry.',
   timeout: 'Took too long. Click to retry.',
@@ -641,6 +725,10 @@ function wireCards(name) {
     if (card.classList.contains('busy')) return;
     const pull = pulls[pullKey(name, src)];
     const failed = pull && pull.status !== 'working' && pull.status !== 'done';
+    if (pull && (pull.status === 'login' || pull.status === 'blocked')) {
+      showLoginPrompt(src, name, pull.status);
+      return;
+    }
     if (card.classList.contains('empty-card') || failed) {
       if (SITES[src]) pullSources(name, [src]);
       return;
@@ -1118,7 +1206,10 @@ $('#home-research').onclick = async () => {
 
 // "/" focuses the search box
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') $('#signin-modal').classList.add('hidden');
+  if (e.key === 'Escape') {
+    $('#signin-modal').classList.add('hidden');
+    if (loginQueue[0]) hideLoginPrompt(loginQueue[0].site);
+  }
   if (e.key !== '/' || ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
   e.preventDefault();
   const box = $('#results').classList.contains('hidden') ? $('#home-q') : $('#top-q');
