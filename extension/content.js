@@ -10,6 +10,12 @@
     : 'Glassdoor';
 
   // ---------- helpers ----------
+  // Messages to the extension. After the extension is reloaded this page's copy is orphaned and
+  // chrome.runtime throws; resolve with null instead of crashing.
+  const send = (m) => new Promise(res => {
+    try { chrome.runtime.sendMessage(m, r => res(chrome.runtime.lastError ? null : r)); }
+    catch (e) { res(null); }
+  });
   const clean = (t) => (t || '').replace(/\s+/g, ' ').trim();
   const isLeaf = (el) => el.children.length === 0;
 
@@ -288,13 +294,13 @@
       btn.disabled = false;
       return;
     }
-    chrome.runtime.sendMessage({
+    send({
       type: 'capture',
       payload: { source: SOURCE, url: location.href, company_name: companyFromPage(), questions, reviews, experiences }
-    }, (resp) => {
+    }).then((resp) => {
       btn.disabled = false;
-      if (chrome.runtime.lastError || !resp) {
-        showToast('Prepify extension is not responding. Reload the page and try again.');
+      if (!resp) {
+        showToast('Prepify Capture was updated or is not responding. Reload this page and try again.');
       } else if (!resp.ok) {
         showToast('Prepify: ' + resp.error);
       } else {
@@ -304,7 +310,6 @@
   });
 
   // ---------- research mode: this tab was opened by Prepify in the background ----------
-  const send = (m) => new Promise(res => chrome.runtime.sendMessage(m, r => res(chrome.runtime.lastError ? null : r)));
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const slug = (t) => t.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 

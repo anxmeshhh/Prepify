@@ -281,6 +281,18 @@ function showExtensionNotice() {
 window.addEventListener('message', (e) => {
   if (e.source !== window || !e.data || e.data.source !== 'prepify-ext') return;
   const m = e.data;
+  if (m.type === 'ext:stale') {                     // the extension was reloaded after this page opened
+    if (!$('#stale-notice')) {
+      $('#report').insertAdjacentHTML('afterbegin', `
+        <div class="notice" id="stale-notice">
+          <b>Prepify Capture was updated.</b> Reload this page to reconnect. Your pulled data in this tab is kept.
+          <div><button class="btn primary" onclick="location.reload()">Reload page</button></div>
+        </div>`);
+    }
+    Object.keys(pulls).forEach(k => { if (pulls[k].status === 'working') delete pulls[k]; });
+    refreshBoxes();
+    return;
+  }
   if (m.type === 'capture') {                       // "Save to Prepify" pressed on a site page
     if (!signedIn()) return;
     addCapture(m.payload, lastData && companyName(lastData));
