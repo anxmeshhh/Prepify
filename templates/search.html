@@ -43,20 +43,15 @@
   <!-- ===== Results ===== -->
   <div id="results" class="results hidden">
     <header class="topbar">
-      <a href="/" class="wordmark small" id="logo-home"><span class="dim">prep</span>ify</a>
-      <form id="top-form" class="searchbar" autocomplete="off">
-        <span class="prompt" aria-hidden="true">&gt;</span>
-        <input id="top-q" name="q" />
-      </form>
-      <div class="auth toplink" data-auth></div>
+      <div class="topbar-inner">
+        <a href="/" class="wordmark small" id="logo-home"><span class="dim">prep</span>ify</a>
+        <form id="top-form" class="searchbar" autocomplete="off">
+          <span class="prompt" aria-hidden="true">&gt;</span>
+          <input id="top-q" name="q" aria-label="Search" />
+        </form>
+        <div class="auth" data-auth></div>
+      </div>
     </header>
-
-    <nav class="filters" id="filters">
-      <button class="filter active" data-filter="all">all</button>
-      <button class="filter" data-filter="questions">questions</button>
-      <button class="filter" data-filter="reviews">reviews</button>
-      <button class="filter" data-filter="sources">sources</button>
-    </nav>
 
     <div class="layout">
       <div class="main-col">

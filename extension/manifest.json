@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Prepify Capture",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Pulls interview questions, answers and reviews from the pages you ask for into your Prepify tab. Nothing is stored on a server.",
   "permissions": ["contextMenus", "storage"],
   "host_permissions": [

@@ -35,6 +35,8 @@ async function finishJob(tabId, status, extra = {}) {
   delete jobs[tabId];
   await setJobs(jobs);
   notifyUi(job, status, extra);
+  // A sign-in wall or "verify you're human" check needs the user: leave that tab open for them.
+  if (status === 'login' || status === 'blocked') return;
   chrome.tabs.remove(Number(tabId)).catch(() => {});
 }
 

@@ -204,11 +204,24 @@
                                   : /\/interviews\//i.test(location.pathname);
   }
 
-  function looksLikeLoginWall() {
-    const t = document.body ? document.body.innerText.slice(0, 4000).toLowerCase() : '';
-    return /sign in|log in|create (a free )?account|continue with google|verify you are human|unusual traffic/.test(t)
-      && !extractQuestions().length;
+  // A bot check (Cloudflare / "Help us protect Glassdoor") rather than real content.
+  function looksBlocked() {
+    const title = document.title.toLowerCase();
+    const t = document.body ? document.body.innerText.slice(0, 3000).toLowerCase() : '';
+    return /just a moment|attention required|access denied|help us protect/.test(title)
+      || /verify you are human|unusual traffic|checking your browser|help us protect glassdoor|press (and|&) hold/.test(t);
   }
+
+  // A real sign-in wall: a login URL, or a visible dialog asking to sign in. Plain "Sign in"
+  // links in the site header don't count (they appear on every page).
+  function looksLikeLoginWall() {
+    if (/\/(profile\/login|member\/|login|signin)/i.test(location.pathname)) return true;
+    const dialogs = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [class*="modal" i]')]
+      .filter(d => d.offsetParent !== null || getComputedStyle(d).position === 'fixed');
+    return dialogs.some(d => /sign in|log in|continue with google|create (a free )?account|sign up/i.test(d.innerText || ''));
+  }
+
+  const pageDetail = () => `${document.title.slice(0, 80)} (${location.pathname})`;
 
   // From a search or company page, find the company's interview page.
   function findInterviewUrl(company) {
@@ -250,18 +263,20 @@
       last = len;
     }
 
+    const fail = (status) => send({ type: 'research:result', status, url: location.href, detail: pageDetail() });
+
+    if (looksBlocked()) return fail('blocked');
+
     if (!isInterviewPage()) {
-      if (looksLikeLoginWall()) return send({ type: 'research:result', status: 'login', url: location.href });
+      // look for the company's interview link first: header "Sign in" text is not a wall
       const next = findInterviewUrl(job.company);
       if (next && next !== location.href) return send({ type: 'research:navigate', url: next, step: 'opening interview page' });
-      return send({ type: 'research:result', status: 'not-found', url: location.href });
+      return fail(looksLikeLoginWall() ? 'login' : 'not-found');
     }
 
     const questions = extractQuestions();
     const reviews = extractReviews();
-    if (!questions.length && !reviews.length) {
-      return send({ type: 'research:result', status: looksLikeLoginWall() ? 'login' : 'empty', url: location.href });
-    }
+    if (!questions.length && !reviews.length) return fail(looksLikeLoginWall() ? 'login' : 'empty');
     send({
       type: 'research:result', status: 'done', url: location.href,
       payload: { source: SOURCE, url: location.href, company_name: job.company, questions, reviews }

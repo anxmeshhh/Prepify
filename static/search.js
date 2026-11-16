@@ -271,7 +271,7 @@ function rerender(src = currentSrc()) {
   if (!lastParsed || $('#results').classList.contains('hidden')) return;
   lastData = buildData();
   if (!signedIn()) return renderGuest(lastData);
-  src ? renderSource(lastData, src) : render(lastData);
+  render(lastData, src);
 }
 
 const companyName = (d) => d.company ? d.company.name : d.parsed.company;
@@ -291,7 +291,6 @@ function noCompany() {
 // ---------- guest view: links only ----------
 function renderGuest(d) {
   understoodLine(d.parsed);
-  $('#filters').classList.add('hidden');
   if (!d.parsed.company) return noCompany();
   const name = companyName(d);
   const links = [['Glassdoor', SITES.Glassdoor], ['AmbitionBox', SITES.AmbitionBox], ['Google', GOOGLE]];
@@ -327,7 +326,7 @@ function renderGuest(d) {
   $$('#panel [data-signin]').forEach(b => b.onclick = openSignin);
 }
 
-// ---------- signed-in results: source boxes + combined summary ----------
+// ---------- signed-in results: source boxes + a dedicated area per site ----------
 function groupBySource(d) {
   const groups = new Map();
   Object.keys(SITES).forEach(s => groups.set(s, { name: s, questions: [], reviews: [], pages: new Map() }));
@@ -352,20 +351,54 @@ function groupBySource(d) {
   return [...groups.values()];
 }
 
-function render(d) {
+// Subject of a question, from its wording (sites rarely label it). First match wins.
+const SUBJECTS = [
+  ['SQL & DBMS', /\b(sql|query|queries|join|dbms|database|normali[sz]ation|primary key|foreign key|acid|index(ing)?|rdbms|nosql|mongodb)\b/i],
+  ['OOP', /\b(oops?|object[- ]oriented|inheritance|polymorphism|encapsulation|abstraction|overloading|overriding|constructor|interface|abstract class)\b/i],
+  ['Coding & DSA', /\b(array|string|linked ?list|tree|graph|sort(ing)?|binary search|dynamic programming|recursion|stack|queue|hash ?map|palindrome|fibonacci|prime|reverse|algorithm|complexity|leetcode|program|code|coding|write a (function|program))\b/i],
+  ['OS & Networks', /\b(operating system|os|thread|process(es)?|deadlock|semaphore|paging|virtual memory|network(ing)?|tcp|udp|http|osi|ip address|dns)\b/i],
+  ['Cloud & DevOps', /\b(cloud|aws|azure|gcp|docker|kubernetes|devops|ci\/?cd|git|jenkins|linux)\b/i],
+  ['Languages & Frameworks', /\b(java|python|c\+\+|javascript|typescript|react|angular|spring|node|\.net|html|css|django|flask)\b/i],
+  ['Aptitude & Reasoning', /\b(aptitude|puzzle|reasoning|probability|percentage|ratio|time and work|logical)\b/i],
+  ['Projects & Experience', /\b(project|internship|experience|worked on|final year|your role)\b/i],
+  ['HR & Behavioral', /\b(yourself|why|strength|weakness|relocat|shift|salary|ctc|notice period|team|conflict|challenge|goal|five years|hobb|motivat|pressure|join|fit|career)\b/i]
+];
+function subjectOf(q) {
+  if (q.category && q.category !== 'Other') return q.category;
+  const hit = SUBJECTS.find(([, re]) => re.test(q.text));
+  return hit ? hit[0] : 'General';
+}
+
+const STATUS_TEXT = {
+  working: 'reading in the background…',
+  login: 'sign in needed · finish in the open tab, then click to retry',
+  blocked: 'site asked to verify you\'re human · finish in the open tab, then click to retry',
+  'not-found': 'couldn\'t find an interview page · click to retry',
+  empty: 'page had no questions · click to retry',
+  timeout: 'took too long · click to retry',
+  error: 'couldn\'t read the page · click to retry',
+  cancelled: 'cancelled · click to retry'
+};
+
+let activeSite = null;          // which site's dedicated area is open
+
+function render(d, src = null) {
   const p = d.parsed;
   understoodLine(p);
-  $('#filters').classList.remove('hidden');
   if (!p.company) return noCompany();
 
   const name = companyName(d);
   const groups = groupBySource(d);
   renderPanel(name, d);
 
-  const withData = groups.filter(g => g.questions.length || g.reviews.length).length;
+  const has = (g) => g.questions.length || g.reviews.length;
+  if (src) activeSite = src;
+  if (!activeSite || !groups.some(g => g.name === activeSite)) activeSite = (groups.find(has) || groups[0]).name;
+
+  const withData = groups.filter(has).length;
   let html = `<div class="sources-head">
       <span>results from <b>${withData}</b> of ${groups.length} sources</span>
-      <span class="hint">click a box to see everything from that site</span>
+      <span class="hint">click a box to open that site's results below</span>
     </div>
     <div class="source-grid">${groups.map(g => sourceCard(g, name)).join('')}</div>`;
 
@@ -379,21 +412,15 @@ function render(d) {
     $('#report').innerHTML = html;
     $('#empty-research').onclick = () => pullSources(name);
   } else {
-    $('#report').innerHTML = html + combinedReport(d);
+    html += `<div id="site-area">${siteArea(groups.find(g => g.name === activeSite), name, groups)}</div>`;
+    $('#report').innerHTML = html;
+    wireSiteArea(name);
   }
   wireCards(name);
-  setFilter('all');
 }
 
-const STATUS_TEXT = {
-  working: 'reading in the background…',
-  login: 'sign in to this site in Chrome, then click to retry',
-  'not-found': 'couldn\'t find an interview page · click to retry',
-  empty: 'page had no questions · click to retry',
-  timeout: 'took too long · click to retry',
-  error: 'couldn\'t read the page · click to retry',
-  cancelled: 'cancelled · click to retry'
-};
+// kept for old ?src= links: the site view is now the dedicated area on the results page
+function renderSource(d, src) { render(d, src); }
 
 function sourceCard(g, company) {
   const s = siteInfo(g.name);
@@ -404,12 +431,13 @@ function sourceCard(g, company) {
     ? `<div class="sc-status ${pull.status}">${busy ? '<span class="spinner"></span>' : ''}${esc(busy && pull.step && pull.step !== 'starting' ? pull.step + '…' : STATUS_TEXT[pull.status])}</div>`
     : (pull && pull.status === 'done' && !pull.added ? '<div class="sc-status done">up to date</div>' : '');
   const preview = g.questions[0] ? `<div class="sc-preview">“${esc(g.questions[0].text)}”</div>` : '';
+  const active = has && g.name === activeSite;
   return `
-    <button class="source-card ${has ? '' : 'empty-card'} ${busy ? 'busy' : ''}" data-src="${esc(g.name)}" type="button">
+    <button class="source-card ${has ? '' : 'empty-card'} ${busy ? 'busy' : ''} ${active ? 'active' : ''}" data-src="${esc(g.name)}" type="button">
       <div class="sc-head">
         <span class="mark" style="--c:${s.color}">${esc(s.mark)}</span>
         <span class="sc-name">${esc(g.name)}</span>
-        <span class="sc-arrow">${busy ? '' : has ? '→' : '+'}</span>
+        <span class="sc-arrow">${busy ? '' : has ? '↓' : '+'}</span>
       </div>
       ${s.host ? `<div class="sc-host">${esc(s.host)}</div>` : ''}
       ${has ? `
@@ -438,13 +466,17 @@ function wireCards(name) {
       if (SITES[src]) pullSources(name, [src]);
       return;
     }
-    go(lastData.query, true, src);
+    activeSite = src;
+    history.replaceState({ q: lastData.query, src }, '', urlFor(lastData.query, src));
+    rerender(src);
+    const area = $('#site-area');
+    if (area) area.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 }
 
-// re-render just the boxes (keeps scroll position and open sections)
+// re-render just the boxes (keeps scroll position and open answers)
 function refreshBoxes() {
-  if (!lastData || currentSrc() || !signedIn()) return;
+  if (!lastData || !signedIn()) return;
   const grid = $('#report .source-grid');
   if (!grid) return;
   const name = companyName(lastData);
@@ -452,121 +484,53 @@ function refreshBoxes() {
   wireCards(name);
 }
 
-function combinedReport(d) {
-  const p = d.parsed;
-  const seen = new Map();
-  d.questions.forEach(q => {
-    const key = norm(q.text);
-    if (!seen.has(key)) seen.set(key, { ...q, reports: 1, sites: new Set([q.source]) });
-    else { const m = seen.get(key); m.reports += 1; m.sites.add(q.source); }
+// The dedicated area for one website: its questions with answers inline, its reviews and pages.
+function siteArea(g, company, groups) {
+  const s = siteInfo(g.name);
+  // the same question on another site gets an "also on" tag
+  const elsewhere = new Map();
+  groups.filter(o => o.name !== g.name).forEach(o =>
+    o.questions.forEach(q => elsewhere.set(norm(q.text), o.name)));
+
+  const subjects = {};
+  const qs = g.questions.map(q => {
+    const subject = subjectOf(q);
+    subjects[subject] = (subjects[subject] || 0) + 1;
+    return { ...q, subject };
   });
-  const questions = [...seen.values()];
-
-  let n = 0;
-  const sec = (kind, title, sub, body) =>
-    `<section class="section" data-kind="${kind}"><h2><span class="num">${String(++n).padStart(2, '0')}</span>${title}</h2>${sub ? `<p class="sub">${sub}</p>` : ''}${body}</section>`;
-
-  let html = '<div class="combined-head">all sources combined</div>';
-
-  const rounds = {};
-  questions.forEach(q => { const r = q.round_type || 'unspecified'; rounds[r] = (rounds[r] || 0) + 1; });
-  html += sec('questions', 'interview rounds', 'rounds that the pulled questions came from',
-    `<div class="rounds">${Object.entries(rounds).sort((a, b) => b[1] - a[1])
-      .map(([r, c]) => `<div class="round"><b>${esc(r)}</b><span>${plural(c, 'question')}</span></div>`).join('')}</div>`);
-
-  const roleNote = p.role && d.role_matched === false
-    ? `no questions pulled for the ${esc(p.role)} role yet, so all roles are shown · ` : '';
-  const cats = {};
-  questions.forEach(q => { const c = q.category || 'Other'; (cats[c] = cats[c] || []).push(q); });
-  html += sec('questions', 'most reported questions', roleNote + 'merged across sites · open a source box for the answers',
-    Object.entries(cats).sort((a, b) => b[1].length - a[1].length).map(([c, list], i) => `
-      <details class="group" ${i === 0 ? 'open' : ''}>
-        <summary>${esc(c)}<span class="count">${list.length}</span></summary>
-        ${list.sort((a, b) => b.reports - a.reports).map(q => `
-          <div class="q">
-            <div class="text">${esc(q.text)}</div>
-            <div class="meta">
-              ${q.reports > 1 ? `<span class="tag good">reported ${q.reports}×</span>` : ''}
-              ${q.difficulty ? `<span class="tag">${esc(q.difficulty)}</span>` : ''}
-              ${[...q.sites].map(s => esc(s)).join(' + ')} · pulled ${fmtDate(q.created_at)}
-            </div>
-          </div>`).join('')}
-      </details>`).join(''));
-
-  if (d.reviews.length) {
-    html += sec('reviews', 'candidate and employee experience', plural(d.reviews.length, 'review') + ' across sources',
-      d.reviews.map(r => reviewHtml(r, true)).join(''));
-  }
-  return html;
-}
-
-function reviewHtml(r, showSource) {
-  return `
-    <div class="result">
-      <div class="title">${esc(r.title || r.job_title || 'Review')}${r.rating ? ` · ${r.rating}/5` : ''}</div>
-      ${r.pros ? `<div class="pros"><b>pros</b>${esc(r.pros)}</div>` : ''}
-      ${r.cons ? `<div class="cons"><b>cons</b>${esc(r.cons)}</div>` : ''}
-      ${r.body ? `<div class="pros">${esc(r.body)}</div>` : ''}
-      <div class="meta">${showSource ? esc(r.source) + ' · ' : ''}${r.job_title ? esc(r.job_title) + ' · ' : ''}${r.review_date ? esc(r.review_date) + ' · ' : ''}pulled ${fmtDate(r.created_at)}</div>
-    </div>`;
-}
-
-// ---------- one source: everything pulled from that site ----------
-function renderSource(d, src) {
-  understoodLine(d.parsed);
-  $('#filters').classList.add('hidden');
-  const name = companyName(d);
-  renderPanel(name, d);
-  const g = groupBySource(d).find(x => x.name === src);
-  const s = siteInfo(src);
-
-  if (!g || (!g.questions.length && !g.reviews.length)) {
-    $('#report').innerHTML = `<button class="back" id="back">← all sources</button>
-      <div class="empty"><h3>nothing pulled from ${esc(src)} yet</h3></div>`;
-    $('#back').onclick = () => go(d.query, true);
-    return;
-  }
 
   let n = 0;
   const sec = (title, sub, body) =>
     `<section class="section"><h2><span class="num">${String(++n).padStart(2, '0')}</span>${title}</h2>${sub ? `<p class="sub">${sub}</p>` : ''}${body}</section>`;
 
-  let html = `<button class="back" id="back">← all sources</button>
-    <div class="source-title">
+  let html = `
+    <div class="site-area-head">
       <span class="mark big" style="--c:${s.color}">${esc(s.mark)}</span>
       <div>
-        <h1>${esc(src)} <span class="dim">· ${esc(name)}</span></h1>
-        <div class="sub">${plural(g.questions.length, 'question')} · ${plural(g.answers, 'answer')} · ${plural(g.reviews.length, 'review')} · ${plural(g.pages.size, 'page')}</div>
+        <h1>${esc(g.name)} <span class="dim">· ${esc(company)}</span></h1>
+        <div class="sub">${plural(g.questions.length, 'question')} · ${plural(g.answers, 'answer')} · ${plural(g.reviews.length, 'review')}</div>
       </div>
-      ${SITES[src] ? `<button class="btn" id="refresh-src">pull again</button>` : ''}
+      ${SITES[g.name] ? `<button class="btn" id="refresh-src" data-src="${esc(g.name)}">pull again</button>` : ''}
     </div>`;
 
-  if (g.questions.length) {
-    html += sec('interview questions and answers', 'click a question to see the answers shown on ' + esc(src),
-      g.questions.map((q, i) => {
-        const answers = q.answers || [];
-        return `
-        <details class="qa" ${i === 0 && answers.length ? 'open' : ''}>
-          <summary>
-            <span class="qa-text">${esc(q.text)}</span>
-            <span class="qa-meta">
-              ${q.round_type ? `<span class="tag">${esc(q.round_type)}</span>` : ''}
-              ${q.difficulty ? `<span class="tag">${esc(q.difficulty)}</span>` : ''}
-              <span class="tag ${answers.length ? 'good' : ''}">${plural(answers.length, 'answer')}</span>
-            </span>
-          </summary>
-          <div class="answers">
-            ${answers.length
-              ? answers.map((a, j) => `<div class="answer"><div class="a-label">answer ${j + 1}</div>${esc(a)}</div>`).join('')
-              : `<div class="answer none">no answers were shown on the page</div>`}
-            <div class="meta">${esc(q.role_title || '')} · pulled ${fmtDate(q.created_at)}${q.url ? ` · <a href="${esc(q.url)}" target="_blank" rel="noopener noreferrer">source page</a>` : ''}</div>
-          </div>
-        </details>`;
-      }).join(''));
+  if (qs.length) {
+    const chips = Object.entries(subjects).sort((a, b) => b[1] - a[1]);
+    html += sec('interview questions and answers', `as shown on ${esc(g.name)} · grouped by subject`,
+      `<div class="qa-tools">
+         <div class="chips">
+           <button class="chip-btn active" data-subject="">all <span>${qs.length}</span></button>
+           ${chips.map(([c, k]) => `<button class="chip-btn" data-subject="${esc(c)}">${esc(c)} <span>${k}</span></button>`).join('')}
+         </div>
+         <input class="qa-filter" id="qa-filter" placeholder="filter questions…" aria-label="Filter questions" />
+       </div>
+       <div class="qa-list">
+         ${qs.map((q, i) => qaCard(q, i, g.name, elsewhere.get(norm(q.text)))).join('')}
+       </div>
+       <p class="qa-none hidden" id="qa-none">no questions match</p>`);
   }
 
   if (g.reviews.length) {
-    html += sec('reviews', '', g.reviews.map(r => reviewHtml(r, false)).join(''));
+    html += sec('reviews', `from ${esc(g.name)}`, g.reviews.map(r => reviewHtml(r)).join(''));
   }
 
   html += sec('source pages', 'every item above came from one of these pages',
@@ -575,11 +539,74 @@ function renderSource(d, src) {
         <div class="title"><a href="${esc(pg.url)}" target="_blank" rel="noopener noreferrer">${esc(pg.url)}</a></div>
         <div class="meta">${plural(pg.items, 'item')} · pulled ${fmtDate(pg.saved)}</div>
       </div>`).join(''));
+  return html;
+}
 
-  $('#report').innerHTML = html;
-  $('#back').onclick = () => go(d.query, true);
+function qaCard(q, i, site, alsoOn) {
+  const answers = q.answers || [];
+  const first = answers[0];
+  const rest = answers.slice(1);
+  return `
+    <article class="qa-card" data-subject="${esc(q.subject)}" data-text="${esc(q.text.toLowerCase())}">
+      <div class="qa-q"><span class="qnum">Q${i + 1}</span><span>${esc(q.text)}</span></div>
+      <div class="qa-tags">
+        <span class="tag">${esc(q.subject)}</span>
+        ${q.round_type ? `<span class="tag">${esc(q.round_type)}</span>` : ''}
+        ${q.difficulty ? `<span class="tag">${esc(q.difficulty)}</span>` : ''}
+        ${alsoOn ? `<span class="tag good">also on ${esc(alsoOn)}</span>` : ''}
+      </div>
+      ${first
+        ? `<div class="answer"><div class="a-label">answer${answers.length > 1 ? ' 1' : ''}</div>${esc(first)}</div>
+           ${rest.length ? `
+             <div class="more-answers hidden">${rest.map((a, j) =>
+               `<div class="answer"><div class="a-label">answer ${j + 2}</div>${esc(a)}</div>`).join('')}</div>
+             <button class="linkbtn more-btn">show ${plural(rest.length, 'more answer')}</button>` : ''}`
+        : `<div class="answer none">no answer shown on ${esc(site)}</div>`}
+    </article>`;
+}
+
+function wireSiteArea(company) {
   const rb = $('#refresh-src');
-  if (rb) rb.onclick = () => { pullSources(name, [src]); rb.textContent = 'pulling…'; rb.disabled = true; };
+  if (rb) rb.onclick = () => { pullSources(company, [rb.dataset.src]); rb.textContent = 'pulling…'; rb.disabled = true; };
+
+  $$('.more-btn').forEach(b => b.onclick = () => {
+    const box = b.previousElementSibling;
+    const open = box.classList.toggle('hidden') === false;
+    b.textContent = open ? 'hide answers' : b.dataset.label || b.textContent;
+    if (open) b.dataset.label = b.dataset.label || b.textContent;
+  });
+  $$('.more-btn').forEach(b => { b.dataset.label = b.textContent; });
+
+  let subject = '';
+  const apply = () => {
+    const f = ($('#qa-filter') ? $('#qa-filter').value : '').trim().toLowerCase();
+    let shown = 0;
+    $$('.qa-card').forEach(c => {
+      const ok = (!subject || c.dataset.subject === subject) && (!f || c.dataset.text.includes(f));
+      c.classList.toggle('hidden', !ok);
+      if (ok) shown += 1;
+    });
+    const none = $('#qa-none');
+    if (none) none.classList.toggle('hidden', shown > 0);
+  };
+  $$('.chip-btn').forEach(b => b.onclick = () => {
+    subject = b.dataset.subject;
+    $$('.chip-btn').forEach(x => x.classList.toggle('active', x === b));
+    apply();
+  });
+  const fi = $('#qa-filter');
+  if (fi) fi.oninput = apply;
+}
+
+function reviewHtml(r) {
+  return `
+    <div class="result">
+      <div class="title">${esc(r.title || r.job_title || 'Review')}${r.rating ? ` · ${r.rating}/5` : ''}</div>
+      ${r.pros ? `<div class="pros"><b>pros</b>${esc(r.pros)}</div>` : ''}
+      ${r.cons ? `<div class="cons"><b>cons</b>${esc(r.cons)}</div>` : ''}
+      ${r.body ? `<div class="pros">${esc(r.body)}</div>` : ''}
+      <div class="meta">${r.job_title ? esc(r.job_title) + ' · ' : ''}${r.review_date ? esc(r.review_date) + ' · ' : ''}pulled ${fmtDate(r.created_at)}</div>
+    </div>`;
 }
 
 // ---------- side panel (signed in) ----------
@@ -603,19 +630,11 @@ function renderPanel(name, d) {
   $('#panel-clear').onclick = () => { clearStore(); Object.keys(pulls).forEach(k => delete pulls[k]); rerender(); };
 }
 
-function setFilter(f) {
-  $$('.filter').forEach(b => b.classList.toggle('active', b.dataset.filter === f));
-  $$('#report .section').forEach(s => s.classList.toggle('hidden', f !== 'all' && s.dataset.kind !== f));
-  $$('#report .source-grid, #report .sources-head').forEach(el =>
-    el.classList.toggle('hidden', f !== 'all' && f !== 'sources'));
-}
-
 // ---------- wiring ----------
 $('#home-form').onsubmit = (e) => { e.preventDefault(); go($('#home-q').value); };
 $('#top-form').onsubmit = (e) => { e.preventDefault(); go($('#top-q').value); };
 $('#logo-home').onclick = (e) => { e.preventDefault(); history.pushState({}, '', '/'); showHome(); };
 $$('.example').forEach(c => c.onclick = () => { $('#home-q').value = c.textContent; go(c.textContent); });
-$$('.filter').forEach(b => b.onclick = () => setFilter(b.dataset.filter));
 
 $('#home-research-pill').onclick = () => $('#home-research').click();
 $('#home-research').onclick = async () => {
