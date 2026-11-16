@@ -380,10 +380,12 @@ async function pullFromServer(company, site) {
     const added = addCapture(payload, company);
     const any = (payload.experiences || []).length || (payload.questions || []).length || (payload.official || []).length;
     pulls[key] = { status: any ? 'done' : 'empty', added };
+    noteDiag(site, any ? 'done' : 'empty', { added });
     rerender();
   } catch (e) {
     const needsUrl = site === 'Official' && /no official page known/i.test(e.message);
     pulls[key] = { status: needsUrl ? 'needs-url' : 'error', detail: needsUrl ? null : e.message };
+    noteDiag(site, needsUrl ? 'needs-url' : 'error', { detail: e.message });
     refreshBoxes();
     if (needsUrl) askOfficialLink(company);
   }
@@ -455,9 +457,10 @@ window.addEventListener('message', (e) => {
   }
   if (m.type !== 'research:update') return;
   if (m.status === 'login' || m.status === 'blocked') {
+    noteDiag(m.site, m.status, { detail: m.detail, outline: m.outline });
     pulls[pullKey(m.company, m.site)] = { status: m.status, detail: m.detail };
     refreshBoxes();
-    showLoginPrompt(m.site, m.company, m.status);
+    if (!diag.active) showLoginPrompt(m.site, m.company, m.status);   // during a source check, just record it
     return;
   }
   if (m.status === 'login-cleared') {
@@ -473,6 +476,7 @@ window.addEventListener('message', (e) => {
   let added = 0;
   if (m.status === 'done' && m.payload) added = addCapture(m.payload, m.company);
   pulls[pullKey(m.company, m.site)] = { status: m.status, step: m.step, added, detail: m.detail };
+  if (m.status !== 'working') noteDiag(m.site, m.status, { added, detail: m.detail, outline: m.outline });
   m.status === 'done' ? rerender() : refreshBoxes();
 });
 
@@ -542,6 +546,109 @@ function toast(text) {
   t.classList.add('show');
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => t.classList.remove('show'), 4000);
+}
+
+// ---------- source check: pull every source, time it, report exactly what happened ----------
+const diag = { active: false, company: null, started: 0, results: {} };
+
+function runSourceCheck(company) {
+  diag.active = true;
+  diag.company = company;
+  diag.started = Date.now();
+  diag.results = {};
+  PULLABLE.forEach(site => { diag.results[site] = { status: 'working', t0: Date.now() }; });
+  renderDiag();
+  if (!signedIn()) { diag.active = false; renderDiag(); openSignin(); return; }
+  pullSources(company);
+  if (!hasExtension()) {
+    PULLABLE.filter(site => !(site === 'Official' || (site === 'Reddit' && auth.sources.reddit_api)))
+      .forEach(site => noteDiag(site, 'error', { detail: 'Prepify Capture extension not detected' }));
+  }
+  const started = diag.started;
+  setTimeout(() => {               // nothing should run longer than this
+    if (diag.started !== started) return;
+    Object.entries(diag.results).forEach(([site, r]) => { if (r.status === 'working') noteDiag(site, 'timeout', { detail: 'No answer from the source within 90 s' }); });
+  }, 90000);
+}
+
+function noteDiag(site, status, info = {}) {
+  if (!diag.active || !diag.results[site]) return;
+  const r = diag.results[site];
+  Object.assign(r, info, { status, ms: Date.now() - r.t0 });
+  renderDiag();
+}
+
+const DIAG_LABEL = {
+  working: 'Running…', done: 'Passed', empty: 'No results', 'not-found': 'No results', login: 'Needs sign-in',
+  blocked: 'Needs verification', 'needs-url': 'Needs careers link', timeout: 'Timed out', error: 'Error', cancelled: 'Cancelled'
+};
+const diagKind = (st) => st === 'done' ? 'good' : st === 'working' ? '' : (st === 'empty' || st === 'not-found') ? 'muted' : 'bad';
+
+function diagCounts(site) {
+  if (!lastData) return { x: 0, q: 0, a: 0 };
+  const g = groupBySource(lastData).find(x => x.name === site);
+  return g ? { x: g.experiences.length + g.official.length, q: g.questions.length, a: g.answers } : { x: 0, q: 0, a: 0 };
+}
+
+function renderDiag() {
+  let el = $('#diag-modal');
+  if (!diag.active) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'diag-modal';
+    el.className = 'modal';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    document.body.appendChild(el);
+  }
+  const rows = Object.entries(diag.results);
+  const finished = rows.filter(([, r]) => r.status !== 'working').length;
+  el.innerHTML = `
+    <div class="modal-box diag-box">
+      <h2>Source check · ${esc(diag.company)}</h2>
+      <p class="modal-sub">${finished} of ${rows.length} sources finished. Failures include an outline of the page so they can be fixed.</p>
+      <div class="diag-table" role="table">
+        <div class="diag-row head" role="row"><span>Source</span><span>Result</span><span>Items</span><span>Questions</span><span>Answers</span><span>Time</span></div>
+        ${rows.map(([site, r]) => {
+          const c = diagCounts(site);
+          return `<div class="diag-row" role="row">
+            <span><span class="mark tiny" style="--c:${siteInfo(site).color}">${esc(siteInfo(site).mark)}</span>${esc(site)}</span>
+            <span class="diag-st ${diagKind(r.status)}">${r.status === 'working' ? '<span class="spinner"></span>' : ''}${esc(DIAG_LABEL[r.status] || r.status)}</span>
+            <span>${c.x}</span><span>${c.q}</span><span>${c.a}</span>
+            <span>${r.ms ? (r.ms / 1000).toFixed(1) + ' s' : '–'}</span>
+            ${r.detail && r.status !== 'done' ? `<span class="diag-detail" title="${esc(r.detail)}">Stopped at: ${esc(r.detail)}</span>` : ''}
+          </div>`;
+        }).join('')}
+      </div>
+      <div class="login-actions">
+        <button class="btn primary" data-diag-copy>Copy report</button>
+        <button class="btn" data-diag-rerun>Run again</button>
+        <button class="linkbtn" data-diag-close>Close</button>
+      </div>
+    </div>`;
+  el.querySelector('[data-diag-copy]').onclick = async (e) => {
+    try { await navigator.clipboard.writeText(diagReport()); e.target.textContent = 'Copied'; }
+    catch (err) { e.target.textContent = 'Copy blocked by the browser'; }
+  };
+  el.querySelector('[data-diag-rerun]').onclick = () => runSourceCheck(diag.company);
+  el.querySelector('[data-diag-close]').onclick = () => { diag.active = false; renderDiag(); };
+}
+
+function diagReport() {
+  const lines = [
+    `Prepify source check · ${diag.company} · ${new Date().toISOString()} · extension ${document.documentElement.dataset.prepifyExt || 'not detected'}`,
+    '',
+    '| Source | Result | Items | Questions | Answers | Time | Stopped at |',
+    '| --- | --- | --- | --- | --- | --- | --- |'
+  ];
+  const fails = [];
+  Object.entries(diag.results).forEach(([site, r]) => {
+    const c = diagCounts(site);
+    lines.push(`| ${site} | ${DIAG_LABEL[r.status] || r.status} | ${c.x} | ${c.q} | ${c.a} | ${r.ms ? (r.ms / 1000).toFixed(1) + ' s' : '-'} | ${(r.status !== 'done' && r.detail) || ''} |`);
+    if (r.status !== 'done' && r.status !== 'working' && r.outline) fails.push(`### ${site}: ${r.status}` + '\n```\n' + r.outline + '\n```');
+  });
+  if (fails.length) lines.push('', '## Page outlines for failures', '', ...fails);
+  return lines.join('\n');
 }
 
 // ---------- routing ----------
@@ -1234,10 +1341,12 @@ function renderPanel(name, d) {
       <div class="row"><span>Extension</span><span class="${hasExtension() ? 'ok' : 'off'}">${hasExtension() ? 'Connected' : 'Not detected'}</span></div>
       <button class="btn" id="panel-research">Pull all sources</button>
       ${anything ? '<button class="btn primary" data-pdf>Download PDF</button>' : ''}
+      <button class="linkbtn" id="panel-check">Run source check</button>
       <button class="linkbtn" id="panel-clear">Clear this session's data</button>
       <p class="note">Pulled data lives only in this browser tab. Closing the tab or signing out erases it.</p>
     </div>`;
   $('#panel-research').onclick = () => pullSources(name);
+  $('#panel-check').onclick = () => runSourceCheck(name);
   $('#panel-clear').onclick = () => { clearStore(); Object.keys(pulls).forEach(k => delete pulls[k]); rerender(); };
 }
 

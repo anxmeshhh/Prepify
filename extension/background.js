@@ -236,7 +236,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'research:result') {       // payload travels to the Prepify tab with the status
-    finishJob(tabId, msg.status, { url: msg.url, payload: msg.payload, detail: msg.detail });
+    finishJob(tabId, msg.status, { url: msg.url, payload: msg.payload, detail: msg.detail, outline: msg.outline });
     return false;
   }
 });

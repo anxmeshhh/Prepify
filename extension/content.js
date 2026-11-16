@@ -348,6 +348,28 @@
 
   const pageDetail = () => `${document.title.slice(0, 80)} (${location.pathname})`;
 
+  // A compact outline of the page (tags, classes, data-test ids, a little text) sent with failures so
+  // the source check report shows how the site actually lays out its content.
+  function domOutline(limit = 3500) {
+    const root = document.querySelector('main, article, [role="main"], #content, .content') || document.body;
+    const out = [];
+    let size = 0;
+    const walk = (el, depth) => {
+      if (size > limit || depth > 9 || /^(SCRIPT|STYLE|SVG|NOSCRIPT|IFRAME|PATH|LINK|META)$/i.test(el.tagName)) return;
+      const own = clean([...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join(' ')).slice(0, 60);
+      const cls = typeof el.className === 'string' ? el.className.split(/\s+/).filter(Boolean).slice(0, 2).join('.') : '';
+      const dt = el.getAttribute('data-test') || el.getAttribute('data-testid') || '';
+      if (own || dt || el.children.length > 1) {
+        const line = '  '.repeat(Math.min(depth, 8)) + el.tagName.toLowerCase() + (cls ? '.' + cls : '') + (dt ? `[${dt}]` : '') + (own ? ` "${own}"` : '');
+        out.push(line);
+        size += line.length + 1;
+      }
+      [...el.children].slice(0, 14).forEach(c => walk(c, depth + 1));
+    };
+    if (root) walk(root, 0);
+    return out.join('\n').slice(0, limit);
+  }
+
   // The site's own "page not found" page (PrepInsta: "404 Error - Oops").
   function looksNotFound() {
     const h1 = clean((document.querySelector('h1') || {}).textContent || '');
@@ -617,7 +639,7 @@
     btn.style.display = 'none';
     await settle();
 
-    const fail = (status) => send({ type: 'research:result', status, url: location.href, detail: pageDetail() });
+    const fail = (status) => send({ type: 'research:result', status, url: location.href, detail: pageDetail(), outline: domOutline() });
     // Automatic checks ("Just a moment...") usually finish by themselves in a real browser within
     // seconds; give the site's own check time before asking the user. Nothing here bypasses it.
     for (let i = 0; i < 10 && looksBlocked(); i++) await sleep(2000);

@@ -70,6 +70,10 @@ ROLE_ALIASES = [
     (r'(?i)\bturbo\b', 'Turbo'),
 ]
 
+# Company names usually written in capitals ("tcs" -> "TCS")
+ACRONYMS = {'tcs', 'ibm', 'hcl', 'ey', 'kpmg', 'pwc', 'sap', 'ge', 'lti', 'l&t', 'at&t', 'ntt', 'dxc', 'cgi', 'hp',
+            'hsbc', 'ubs', 'bny', 'cme', 'jpmc', 'amd', 'ola', 'ust', 'zs', 'bcg', 'atos', 'tcl'}
+
 INTENT_WORDS = {
     'questions': ['question', 'asked'],
     'process': ['process', 'round', 'recruitment', 'hiring', 'selection'],
@@ -134,7 +138,8 @@ def parse_query(q, known=()):
                 cur.append(t)
         if len(cur) > len(best):
             best = cur
-        company = ' '.join(w if w.isupper() else w[:1].upper() + w[1:] for w in best) or None
+        company = ' '.join(w if w.isupper() else w.upper() if w.lower() in ACRONYMS else w[:1].upper() + w[1:]
+                           for w in best) or None
 
     return {'company': company, 'role': role, 'intents': intents}
 
@@ -169,9 +174,13 @@ def auth_google():
     try:
         from google.auth.transport import requests as google_requests
         from google.oauth2 import id_token
-        info = id_token.verify_oauth2_token(credential, google_requests.Request(), GOOGLE_CLIENT_ID)
-    except Exception:
-        return jsonify({'error': 'invalid Google sign-in'}), 401
+        # PC clocks drift; allow a few minutes either way when checking the token's issue/expiry times.
+        info = id_token.verify_oauth2_token(credential, google_requests.Request(), GOOGLE_CLIENT_ID,
+                                            clock_skew_in_seconds=300)
+    except Exception as e:
+        reason = str(e)[:200]
+        app.logger.warning('Google sign-in rejected: %s', reason)
+        return jsonify({'error': f'Google sign-in was rejected: {reason}'}), 401
     if not info.get('email_verified'):
         return jsonify({'error': 'Google account email is not verified'}), 401
     # Only what the UI shows; the Google token itself is not kept.
