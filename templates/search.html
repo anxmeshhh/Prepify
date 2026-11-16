@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Prepify</title>
+  <link rel="stylesheet" href="/static/search.css" />
+</head>
+<body>
+  <!-- ===== Home: centered search, like a search engine ===== -->
+  <main id="home" class="home">
+    <nav class="corner"><a href="/workspace">Workspace</a></nav>
+    <div class="home-inner">
+      <div class="wordmark">Prepify</div>
+
+      <form id="home-form" class="searchbar big" autocomplete="off">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="home-q" name="q" aria-label="Search" autofocus />
+        <button type="button" class="pill" id="home-research-pill" title="Open Glassdoor, AmbitionBox and Google for this company">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>
+          Research
+        </button>
+      </form>
+
+      <div class="home-actions">
+        <button type="submit" form="home-form" class="btn">Prepify Search</button>
+        <button type="button" id="home-research" class="btn">Research Sources</button>
+      </div>
+
+      <p class="promo">Tip: save interview pages with the Prepify extension and they show up in your results. <a href="/workspace">Open workspace</a></p>
+      <p class="offered">Try:
+        <button class="example" type="button">Target Corporation interview questions</button>
+        <button class="example" type="button">Accenture ASE interview process</button>
+        <button class="example" type="button">TCS Ninja HR questions</button>
+      </p>
+    </div>
+  </main>
+
+  <!-- ===== Results ===== -->
+  <div id="results" class="results hidden">
+    <header class="topbar">
+      <a href="/" class="wordmark small" id="logo-home">Prepify</a>
+      <form id="top-form" class="searchbar" autocomplete="off">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="top-q" name="q" />
+      </form>
+      <a href="/workspace" class="toplink">Workspace</a>
+    </header>
+
+    <nav class="filters" id="filters">
+      <button class="filter active" data-filter="all">All</button>
+      <button class="filter" data-filter="questions">Questions</button>
+      <button class="filter" data-filter="reviews">Reviews</button>
+      <button class="filter" data-filter="sources">Sources</button>
+    </nav>
+
+    <div class="layout">
+      <div class="main-col">
+        <p class="understood" id="understood"></p>
+        <div id="report"></div>
+      </div>
+      <aside class="side-col" id="panel"></aside>
+    </div>
+  </div>
+
+  <script src="/static/search.js"></script>
+</body>
+</html>
