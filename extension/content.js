@@ -195,4 +195,85 @@
       }
     });
   });
+
+  // ---------- research mode: this tab was opened by Prepify in the background ----------
+  const send = (m) => new Promise(res => chrome.runtime.sendMessage(m, r => res(chrome.runtime.lastError ? null : r)));
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const slug = (t) => t.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+  function isInterviewPage() {
+    return SOURCE === 'Glassdoor' ? /\/Interview\//i.test(location.pathname)
+                                  : /\/interviews\//i.test(location.pathname);
+  }
+
+  function looksLikeLoginWall() {
+    const t = document.body ? document.body.innerText.slice(0, 4000).toLowerCase() : '';
+    return /sign in|log in|create (a free )?account|continue with google|verify you are human|unusual traffic/.test(t)
+      && !extractQuestions().length;
+  }
+
+  // From a search or company page, find the company's interview page.
+  function findInterviewUrl(company) {
+    const links = [...document.querySelectorAll('a[href]')].map(a => a.href);
+    const want = slug(company).split('-')[0];
+    if (SOURCE === 'Glassdoor') {
+      const direct = links.find(h => /\/Interview\/.+-Interview-Questions-E\d+/i.test(h));
+      if (direct) return direct;
+      for (const h of links) {
+        const m = h.match(/(?:EI_IE|-E)(\d+)[.\d,]*\.htm/i);
+        if (m && h.toLowerCase().includes(want)) {
+          return `${location.origin}/Interview/${slug(company)}-Interview-Questions-E${m[1]}.htm`;
+        }
+      }
+    } else {
+      const direct = links.find(h => /\/interviews\/[^/?#]+-interview-questions/i.test(h) && h.toLowerCase().includes(want));
+      if (direct) return direct;
+      for (const h of links) {
+        const m = h.match(/\/(?:overview|reviews|salaries)\/([a-z0-9-]+?)-(?:overview|reviews|salaries)\b/i);
+        if (m && m[1].includes(want)) return `${location.origin}/interviews/${m[1]}-interview-questions`;
+      }
+      // last resort: AmbitionBox slugs usually match the company name
+      return `${location.origin}/interviews/${slug(company)}-interview-questions`;
+    }
+    return null;
+  }
+
+  async function researchMode() {
+    const job = await send({ type: 'research:whoami' });
+    if (!job) return;
+    btn.style.display = 'none';
+
+    // single-page apps keep rendering after load; wait until the text stops growing
+    let last = -1;
+    for (let i = 0; i < 8; i++) {
+      await sleep(1000);
+      const len = document.body ? document.body.innerText.length : 0;
+      if (len === last && len > 500) break;
+      last = len;
+    }
+
+    if (!isInterviewPage()) {
+      if (looksLikeLoginWall()) return send({ type: 'research:result', status: 'login', url: location.href });
+      const next = findInterviewUrl(job.company);
+      if (next && next !== location.href) return send({ type: 'research:navigate', url: next, step: 'opening interview page' });
+      return send({ type: 'research:result', status: 'not-found', url: location.href });
+    }
+
+    const questions = extractQuestions();
+    const reviews = extractReviews();
+    if (!questions.length && !reviews.length) {
+      return send({ type: 'research:result', status: looksLikeLoginWall() ? 'login' : 'empty', url: location.href });
+    }
+    const resp = await send({
+      type: 'capture',
+      payload: { source: SOURCE, url: location.href, company_name: job.company, research: true, questions, reviews }
+    });
+    if (!resp || !resp.ok) {
+      return send({ type: 'research:result', status: 'error', url: location.href, detail: resp ? resp.error : 'Prepify app not reachable' });
+    }
+    send({ type: 'research:result', status: 'done', url: location.href,
+           added: resp.result.questions_added + resp.result.reviews_added });
+  }
+
+  researchMode();
 })();

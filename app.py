@@ -322,6 +322,9 @@ def capture():
     url = d.get('url')
 
     company_id = d.get('company_id')
+    if not company_id and d.get('research') and d.get('company_name'):
+        # pulled by a Prepify search: file it under the company that was searched
+        company_id = find_or_create_company(db, d['company_name'])
     if not company_id:
         active = db.execute("SELECT value FROM settings WHERE key='active_company_id'").fetchone()
         if active:

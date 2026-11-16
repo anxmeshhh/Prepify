@@ -36,25 +36,62 @@ const SITES = {
     url: (n) => `https://www.ambitionbox.com/search?q=${encodeURIComponent(n)}`
   }
 };
-const GOOGLE = (n) => `https://www.google.com/search?q=${encodeURIComponent(n + ' interview questions experience')}`;
 
 function siteInfo(name) {
   return SITES[name] || { mark: (name || '?')[0].toUpperCase(), color: 'var(--purple)', host: '', url: null };
 }
 
-// Opens the source sites for a company and makes it the capture target for the extension.
-// Tabs must be opened synchronously inside the click, so pass pre-opened windows when the name isn't known yet.
-async function researchSources(name, wins) {
-  const links = [SITES.Glassdoor.url(name), SITES.AmbitionBox.url(name), GOOGLE(name)];
-  if (wins) links.forEach((u, i) => { if (wins[i]) wins[i].location = u; });
-  else links.forEach(u => window.open(u, '_blank', 'noopener'));
-  await getJson('/api/active', { method: 'POST', body: JSON.stringify({ name }) });
+// ---------- pulling data into Prepify (via the Prepify Capture extension) ----------
+// The extension opens the site in a background tab of your own signed-in Chrome, reads the
+// interview page, saves it to Prepify and closes the tab. Progress comes back as messages.
+const pulls = {};                       // `${company}|${site}` -> { status, step, added, detail }
+const pullKey = (company, site) => `${company.toLowerCase()}|${site}`;
+const hasExtension = () => !!document.documentElement.dataset.prepifyExt;
+
+function pullSources(company, sites = Object.keys(SITES)) {
+  if (!hasExtension()) { showExtensionNotice(); return; }
+  sites.forEach(site => { pulls[pullKey(company, site)] = { status: 'working', step: 'starting' }; });
+  window.postMessage({ source: 'prepify-page', type: 'research:start', company, sites }, location.origin);
+  refreshBoxes();
 }
 
-async function openOneSource(site, name) {
-  window.open(SITES[site].url(name), '_blank', 'noopener');
-  await getJson('/api/active', { method: 'POST', body: JSON.stringify({ name }) });
+function showExtensionNotice() {
+  const el = $('#ext-notice');
+  if (el) { el.classList.remove('hidden'); return; }
+  $('#report').insertAdjacentHTML('afterbegin', `
+    <div class="notice" id="ext-notice">
+      <b>Prepify Capture extension not detected.</b> It pulls the data into Prepify using your own signed-in Chrome.
+      Load it from <code>chrome://extensions</code> → developer mode → load unpacked → the <code>extension</code> folder,
+      then reload this page.
+    </div>`);
 }
+
+let refreshTimer = null;
+window.addEventListener('message', (e) => {
+  if (e.source !== window || !e.data || e.data.source !== 'prepify-ext' || e.data.type !== 'research:update') return;
+  const m = e.data;
+  pulls[pullKey(m.company, m.site)] = { status: m.status, step: m.step, added: m.added, detail: m.detail };
+  if (m.status === 'done') {
+    // new data saved: re-run the search so boxes and the combined report include it
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => { if (lastData) { const q = lastData.query; lastData = null; runSearch(q, currentSrc()); } }, 300);
+  } else {
+    refreshBoxes();
+  }
+});
+
+function currentSrc() { return new URLSearchParams(location.search).get('src'); }
+
+// re-render just the boxes (keeps scroll position and open sections)
+function refreshBoxes() {
+  if (!lastData || currentSrc()) return;
+  const grid = $('#report .source-grid');
+  if (!grid) return;
+  grid.innerHTML = groupBySource(lastData).map(g => sourceCard(g, companyName(lastData))).join('');
+  wireCards(companyName(lastData));
+}
+
+const companyName = (d) => d.company ? d.company.name : d.parsed.company;
 
 // ---------- routing ----------
 function showHome() {
@@ -159,17 +196,17 @@ function render(d) {
       <span>results from <b>${withData}</b> of ${groups.length} sources</span>
       <span class="hint">click a box to see everything from that site</span>
     </div>
-    <div class="source-grid">${groups.map(g => sourceCard(g)).join('')}</div>`;
+    <div class="source-grid">${groups.map(g => sourceCard(g, name)).join('')}</div>`;
 
   if (!d.questions.length && !d.reviews.length) {
     html += `<div class="empty" style="margin-top:24px;">
       <h3>nothing saved for ${esc(name)} yet</h3>
-      click a box to open that site, sign in, and press <b>Save to Prepify</b> on any interview or review page.
-      the box fills in with what you saved.
-      <div><button class="btn primary" id="empty-research">open all sources for ${esc(name)}</button></div>
+      click a box to pull that site into Prepify, or pull everything at once. Prepify reads the pages
+      in the background using your own signed-in Chrome, so you stay on this page.
+      <div><button class="btn primary" id="empty-research">pull all sources for ${esc(name)}</button></div>
     </div>`;
     $('#report').innerHTML = html;
-    $('#empty-research').onclick = () => researchSources(name);
+    $('#empty-research').onclick = () => pullSources(name);
     wireCards(name);
     return;
   }
@@ -179,16 +216,31 @@ function render(d) {
   wireCards(name);
 }
 
-function sourceCard(g) {
+const STATUS_TEXT = {
+  working: 'reading in the background…',
+  login: 'sign in to this site in Chrome, then click to retry',
+  'not-found': 'couldn\'t find an interview page · click to retry',
+  empty: 'page had no questions · click to retry',
+  timeout: 'took too long · click to retry',
+  error: 'couldn\'t save · click to retry',
+  cancelled: 'cancelled · click to retry'
+};
+
+function sourceCard(g, company) {
   const s = siteInfo(g.name);
   const has = g.questions.length || g.reviews.length;
+  const pull = company ? pulls[pullKey(company, g.name)] : null;
+  const busy = pull && pull.status === 'working';
+  const statusLine = pull && STATUS_TEXT[pull.status]
+    ? `<div class="sc-status ${pull.status}">${busy ? '<span class="spinner"></span>' : ''}${esc(busy && pull.step && pull.step !== 'starting' ? pull.step + '…' : STATUS_TEXT[pull.status])}</div>`
+    : (pull && pull.status === 'done' && !pull.added ? '<div class="sc-status done">up to date</div>' : '');
   const preview = g.questions[0] ? `<div class="sc-preview">“${esc(g.questions[0].text)}”</div>` : '';
   return `
-    <button class="source-card ${has ? '' : 'empty-card'}" data-src="${esc(g.name)}" type="button">
+    <button class="source-card ${has ? '' : 'empty-card'} ${busy ? 'busy' : ''}" data-src="${esc(g.name)}" type="button">
       <div class="sc-head">
         <span class="mark" style="--c:${s.color}">${esc(s.mark)}</span>
         <span class="sc-name">${esc(g.name)}</span>
-        <span class="sc-arrow">${has ? '→' : '↗'}</span>
+        <span class="sc-arrow">${busy ? '' : has ? '→' : '+'}</span>
       </div>
       ${s.host ? `<div class="sc-host">${esc(s.host)}</div>` : ''}
       ${has ? `
@@ -198,18 +250,23 @@ function sourceCard(g) {
           <span><b>${g.reviews.length}</b> reviews</span>
         </div>
         ${preview}
+        ${statusLine}
         <div class="sc-foot">${plural(g.pages.size, 'page')} · saved ${fmtDate(g.newest)}</div>`
       : `
-        <div class="sc-stats muted">nothing saved yet</div>
-        <div class="sc-foot">${SITES[g.name] ? `open ${esc(g.name)} and save pages` : ''}</div>`}
+        <div class="sc-stats muted">nothing pulled yet</div>
+        ${statusLine}
+        <div class="sc-foot">${SITES[g.name] && !statusLine ? `click to pull from ${esc(g.name)}` : ''}</div>`}
     </button>`;
 }
 
 function wireCards(name) {
   $$('.source-card').forEach(card => card.onclick = () => {
     const src = card.dataset.src;
-    if (card.classList.contains('empty-card')) {
-      if (SITES[src]) openOneSource(src, name);
+    if (card.classList.contains('busy')) return;
+    const pull = pulls[pullKey(name, src)];
+    const failed = pull && pull.status !== 'working' && pull.status !== 'done';
+    if (card.classList.contains('empty-card') || failed) {
+      if (SITES[src]) pullSources(name, [src]);
       return;
     }
     go(lastData.query, true, src);
@@ -288,6 +345,7 @@ function renderSource(d, src) {
         <h1>${esc(src)} <span class="dim">· ${esc(name)}</span></h1>
         <div class="sub">${plural(g.questions.length, 'question')} · ${plural(g.answers, 'answer')} · ${plural(g.reviews.length, 'review')} · ${plural(g.pages.size, 'page')} saved</div>
       </div>
+      ${SITES[src] ? `<button class="btn" id="refresh-src">pull again</button>` : ''}
     </div>`;
 
   if (g.questions.length) {
@@ -335,6 +393,8 @@ function renderSource(d, src) {
 
   $('#report').innerHTML = html;
   $('#back').onclick = () => go(d.query, true);
+  const rb = $('#refresh-src');
+  if (rb) rb.onclick = () => { pullSources(name, [src]); rb.textContent = 'pulling…'; rb.disabled = true; };
 }
 
 // ---------- side panel ----------
@@ -349,15 +409,11 @@ function renderPanel(name, d) {
       <div class="row"><span>questions</span><span>${unique}</span></div>
       <div class="row"><span>reviews</span><span>${d.reviews.length}</span></div>
       <div class="row"><span>avg rating</span><span>${avg}</span></div>
-      <div class="links">
-        <a href="${SITES.Glassdoor.url(name)}" target="_blank" rel="noopener noreferrer">Glassdoor ↗</a>
-        <a href="${SITES.AmbitionBox.url(name)}" target="_blank" rel="noopener noreferrer">AmbitionBox ↗</a>
-        <a href="${GOOGLE(name)}" target="_blank" rel="noopener noreferrer">Google ↗</a>
-      </div>
-      <button class="btn" id="panel-research">research sources</button>
-      <p class="note">opens the sites in new tabs · pages you save with the Prepify extension land under ${esc(name)}</p>
+      <div class="row"><span>extension</span><span class="${hasExtension() ? 'ok' : 'off'}">${hasExtension() ? 'connected' : 'not detected'}</span></div>
+      <button class="btn" id="panel-research">pull all sources</button>
+      <p class="note">reads Glassdoor and AmbitionBox in the background with your own signed-in Chrome · results appear here</p>
     </div>`;
-  $('#panel-research').onclick = () => researchSources(name);
+  $('#panel-research').onclick = () => pullSources(name);
 }
 
 function setFilter(f) {
@@ -378,16 +434,9 @@ $('#home-research-pill').onclick = () => $('#home-research').click();
 $('#home-research').onclick = async () => {
   const q = $('#home-q').value.trim();
   if (!q) { $('#home-q').focus(); return; }
-  // open placeholder tabs now (inside the click) so the popup blocker allows them
-  const wins = [0, 1, 2].map(() => window.open('about:blank', '_blank'));
-  try {
-    const d = await getJson('/api/search?q=' + encodeURIComponent(q));
-    if (!d.parsed.company) { wins.forEach(w => w && w.close()); go(q); return; }
-    await researchSources(d.company ? d.company.name : d.parsed.company, wins);
-    go(q);
-  } catch (e) {
-    wins.forEach(w => w && w.close());
-  }
+  history.pushState({ q }, '', urlFor(q));
+  await runSearch(q, null);
+  if (lastData && lastData.parsed.company) pullSources(companyName(lastData));
 };
 
 // "/" focuses the search box, like a terminal command palette

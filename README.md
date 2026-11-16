@@ -9,8 +9,9 @@ Type a query the way you would on Google, for example `Target Corporation interv
 - **Google-style search.** A single search box, with a results page laid out in numbered sections: overview, interview rounds, questions grouped by subject, candidate experience and sources.
 - **Natural-language queries.** "I want to prepare for Accenture for the Associate Software Engineer role" is read as company `Accenture`, role `Associate Software Engineer`.
 - **Evidence only.** Questions come from saved reports, never from AI guesses. Duplicate questions are merged and counted ("reported 2×").
-- **Research sources.** One click opens Glassdoor, AmbitionBox and Google for the company, and makes that company the capture target.
-- **Prepify Capture (Chrome extension).** On an interview or review page you are viewing, click **Save to Prepify** to save the questions and reviews into your local database. You can also right-click selected text and choose "Save selection to Prepify".
+- **Source boxes.** Results are shown as one box per site (Glassdoor, AmbitionBox). Click a box to see everything from that site inside Prepify: questions, their answers, reviews, and the pages they came from.
+- **Pull in place.** Click an empty box, or "pull all sources", and the Prepify Capture extension reads that site in a background tab of your own signed-in Chrome. It saves the interview page and closes the tab, and the box fills in live. You never leave Prepify. It opens at most a few pages per site, with no pagination or crawling.
+- **Prepify Capture (Chrome extension).** Besides pulling, you can click **Save to Prepify** on any interview or review page you're viewing, or right-click selected text and choose "Save selection to Prepify".
 - **Workspace.** Manage companies, roles, questions and reviews, and write practice answers.
 
 ## Run it
