@@ -65,6 +65,7 @@ function addCapture(payload, fallbackCompany) {
   if (!name) return 0;
   const key = name.toLowerCase();
   const c = store.companies[key] || (store.companies[key] = { name, questions: [], reviews: [] });
+  c.experiences = c.experiences || [];
   const src = payload.source || 'Unknown';
   const now = new Date().toISOString();
   let added = 0;
@@ -90,6 +91,14 @@ function addCapture(payload, fallbackCompany) {
     const k = [r.title, r.pros, r.cons, r.body].map(x => (x || '').trim()).join('|');
     if (k === '|||' || c.reviews.some(x => x.source === src && x._k === k)) return;
     c.reviews.push({ ...r, review_date: r.date || null, source: src, url: payload.url, created_at: now, _k: k });
+    added += 1;
+  });
+
+  (payload.experiences || []).forEach(xp => {
+    const k = [xp.role, xp.date, (xp.process || xp.application || '').slice(0, 80), (xp.rounds || []).length,
+               (xp.questions || []).map(q => q.text).join('|').slice(0, 120)].join('#');
+    if (c.experiences.some(x => x.source === src && x._k === k)) return;
+    c.experiences.push({ ...xp, source: src, url: payload.url, created_at: now, _k: k });
     added += 1;
   });
 
@@ -242,7 +251,8 @@ function buildData() {
     if (f.length) questions = f;
   }
   return { query: lastParsed.query, parsed: p, company: entry ? { name: entry.name } : null,
-           questions, reviews: entry ? entry.reviews : [], role_matched: roleMatched };
+           questions, reviews: entry ? entry.reviews : [], experiences: entry ? (entry.experiences || []) : [],
+           role_matched: roleMatched };
 }
 
 async function runSearch(q, src) {
@@ -329,10 +339,11 @@ function renderGuest(d) {
 // ---------- signed-in results: source boxes + a dedicated area per site ----------
 function groupBySource(d) {
   const groups = new Map();
-  Object.keys(SITES).forEach(s => groups.set(s, { name: s, questions: [], reviews: [], pages: new Map() }));
+  const blank = (s) => ({ name: s, questions: [], reviews: [], experiences: [], pages: new Map() });
+  Object.keys(SITES).forEach(s => groups.set(s, blank(s)));
   const add = (x, kind) => {
     const s = x.source || 'Unknown';
-    if (!groups.has(s)) groups.set(s, { name: s, questions: [], reviews: [], pages: new Map() });
+    if (!groups.has(s)) groups.set(s, blank(s));
     const g = groups.get(s);
     g[kind].push(x);
     if (x.url) {
@@ -344,9 +355,10 @@ function groupBySource(d) {
   };
   d.questions.forEach(q => add(q, 'questions'));
   d.reviews.forEach(r => add(r, 'reviews'));
+  (d.experiences || []).forEach(x => add(x, 'experiences'));
   groups.forEach(g => {
     g.answers = g.questions.reduce((n, q) => n + (q.answers || []).length, 0);
-    g.newest = [...g.questions, ...g.reviews].map(x => x.created_at).sort().at(-1);
+    g.newest = [...g.questions, ...g.reviews, ...g.experiences].map(x => x.created_at).sort().at(-1);
   });
   return [...groups.values()];
 }
@@ -391,7 +403,7 @@ function render(d, src = null) {
   const groups = groupBySource(d);
   renderPanel(name, d);
 
-  const has = (g) => g.questions.length || g.reviews.length;
+  const has = (g) => g.questions.length || g.reviews.length || g.experiences.length;
   if (src) activeSite = src;
   if (!activeSite || !groups.some(g => g.name === activeSite)) activeSite = (groups.find(has) || groups[0]).name;
 
@@ -402,7 +414,7 @@ function render(d, src = null) {
     </div>
     <div class="source-grid">${groups.map(g => sourceCard(g, name)).join('')}</div>`;
 
-  if (!d.questions.length && !d.reviews.length) {
+  if (!d.questions.length && !d.reviews.length && !d.experiences.length) {
     html += `<div class="empty" style="margin-top:24px;">
       <h3>nothing pulled for ${esc(name)} yet</h3>
       click a box to pull that site into Prepify, or pull everything at once. Prepify reads the pages
@@ -424,7 +436,7 @@ function renderSource(d, src) { render(d, src); }
 
 function sourceCard(g, company) {
   const s = siteInfo(g.name);
-  const has = g.questions.length || g.reviews.length;
+  const has = g.questions.length || g.reviews.length || g.experiences.length;
   const pull = pulls[pullKey(company, g.name)];
   const busy = pull && pull.status === 'working';
   const statusLine = pull && STATUS_TEXT[pull.status]
@@ -442,6 +454,7 @@ function sourceCard(g, company) {
       ${s.host ? `<div class="sc-host">${esc(s.host)}</div>` : ''}
       ${has ? `
         <div class="sc-stats">
+          <span><b>${g.experiences.length}</b> experiences</span>
           <span><b>${g.questions.length}</b> questions</span>
           <span><b>${g.answers}</b> answers</span>
           <span><b>${g.reviews.length}</b> reviews</span>
@@ -508,10 +521,15 @@ function siteArea(g, company, groups) {
       <span class="mark big" style="--c:${s.color}">${esc(s.mark)}</span>
       <div>
         <h1>${esc(g.name)} <span class="dim">· ${esc(company)}</span></h1>
-        <div class="sub">${plural(g.questions.length, 'question')} · ${plural(g.answers, 'answer')} · ${plural(g.reviews.length, 'review')}</div>
+        <div class="sub">${plural(g.experiences.length, 'experience')} · ${plural(g.questions.length, 'question')} · ${plural(g.answers, 'answer')} · ${plural(g.reviews.length, 'review')}</div>
       </div>
       ${SITES[g.name] ? `<button class="btn" id="refresh-src" data-src="${esc(g.name)}">pull again</button>` : ''}
     </div>`;
+
+  if (g.experiences.length) {
+    html += sec('interview experiences', `what candidates went through, as written on ${esc(g.name)} · newest first`,
+      `<div class="xp-list">${[...g.experiences].sort(byDateDesc).map((x, i) => xpCard(x, i)).join('')}</div>`);
+  }
 
   if (qs.length) {
     const chips = Object.entries(subjects).sort((a, b) => b[1] - a[1]);
@@ -540,6 +558,56 @@ function siteArea(g, company, groups) {
         <div class="meta">${plural(pg.items, 'item')} · pulled ${fmtDate(pg.saved)}</div>
       </div>`).join(''));
   return html;
+}
+
+// newest experiences first; "3 months ago" style dates sort after real dates
+function xpTime(x) {
+  const t = Date.parse(x.date || '');
+  return isNaN(t) ? 0 : t;
+}
+const byDateDesc = (a, b) => xpTime(b) - xpTime(a);
+
+function badge(text, kind) {
+  return text ? `<span class="tag ${kind || ''}">${esc(text)}</span>` : '';
+}
+function outcomeKind(t) {
+  return /accepted|selected|got offer|^offer/i.test(t || '') ? 'good' : /no offer|rejected|declined/i.test(t || '') ? 'bad' : '';
+}
+function experienceKind(t) {
+  return /positive/i.test(t || '') ? 'good' : /negative/i.test(t || '') ? 'bad' : '';
+}
+
+function xpCard(x, i) {
+  const block = (label, body) => body ? `<div class="xp-block"><div class="xp-label">${label}</div>${body}</div>` : '';
+  const para = (t) => t ? `<p>${esc(t)}</p>` : '';
+  const rounds = (x.rounds || []).length
+    ? `<ol class="xp-rounds">${x.rounds.map(r => `<li><b>${esc(r.name)}</b>${r.detail ? `<span>${esc(r.detail)}</span>` : ''}</li>`).join('')}</ol>` : '';
+  const qs = (x.questions || []).length
+    ? `<ol class="xp-questions">${x.questions.map(q => `<li><span>${esc(q.text)}</span>${(q.answers || []).map((a, j) =>
+        `<div class="answer"><div class="a-label">answer${q.answers.length > 1 ? ' ' + (j + 1) : ''}</div>${esc(a)}</div>`).join('')}</li>`).join('')}</ol>` : '';
+  const preview = x.process || x.application || (x.rounds && x.rounds[0] && `${x.rounds[0].name}: ${x.rounds[0].detail}`) || '';
+  return `
+    <details class="xp-card" ${i === 0 ? 'open' : ''}>
+      <summary>
+        <div class="xp-head">
+          <span class="xp-role">${esc(x.role || 'Interview')}</span>
+          <span class="xp-when">${esc([x.date, x.location].filter(Boolean).join(' · '))}</span>
+        </div>
+        <div class="xp-badges">
+          ${badge(x.outcome, outcomeKind(x.outcome))}${badge(x.experience, experienceKind(x.experience))}${badge(x.difficulty)}
+          ${(x.rounds || []).length ? badge(plural(x.rounds.length, 'round')) : ''}${(x.questions || []).length ? badge(plural(x.questions.length, 'question')) : ''}
+        </div>
+        ${preview ? `<div class="xp-preview">${esc(preview)}</div>` : ''}
+      </summary>
+      <div class="xp-body">
+        ${block('how they applied', para(x.application))}
+        ${block('interview process', para(x.process))}
+        ${block('rounds', rounds)}
+        ${block('questions asked', qs)}
+        ${block('tips', para(x.tips))}
+        ${x.url ? `<div class="meta">pulled ${fmtDate(x.created_at)} · <a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">source page</a></div>` : ''}
+      </div>
+    </details>`;
 }
 
 function qaCard(q, i, site, alsoOn) {
@@ -618,6 +686,7 @@ function renderPanel(name, d) {
     <div class="panel">
       <h3>${esc(name)}</h3>
       <div class="kind">company</div>
+      <div class="row"><span>experiences</span><span>${(d.experiences || []).length}</span></div>
       <div class="row"><span>questions</span><span>${unique}</span></div>
       <div class="row"><span>reviews</span><span>${d.reviews.length}</span></div>
       <div class="row"><span>avg rating</span><span>${avg}</span></div>

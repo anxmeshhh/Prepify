@@ -133,6 +133,105 @@
     return out;
   }
 
+  // ---------- interview experiences: one candidate's whole write-up, kept structured ----------
+  // Section labels used inside experience cards on Glassdoor ("Application", "Interview",
+  // "Interview questions [2]") and AmbitionBox ("Round 1 - Aptitude Test", "Interview Preparation Tips").
+  const XP_LABEL = /^(application|interview|interview process|interview questions?\s*[\[(]?\d*[\])]?|interview preparation tips|interview tips|preparation tips|tips?|round\s*\d+.*|topics to prepare.*|i applied via .*)$/i;
+  const DATE_RE = /\b(\d{1,2}\s+[A-Z][a-z]{2,8}\s+\d{4}|[A-Z][a-z]{2,8}\s+\d{1,2},?\s+\d{4}|[A-Z][a-z]{2,8}\s+\d{4}|\d+\s+(?:days?|weeks?|months?|years?)\s+ago)\b/;
+  const OUTCOME_RE = /^(accepted offer|declined offer|no offer|got offer|offer|selected|rejected|no response|under process)$/i;
+  const EXPERIENCE_RE = /^(positive|neutral|negative) experience$/i;
+  const DIFFICULTY_RE = /^(very easy|easy|average|moderate|difficult|hard|very difficult) interview$|^difficulty[:\s]+.+$/i;
+
+  function leafTexts(card) {
+    return [...card.querySelectorAll('*')].filter(isLeaf).map(e => clean(e.textContent)).filter(Boolean);
+  }
+
+  function experienceCard(label) {
+    let el = label.parentElement;
+    for (let i = 0; i < 10 && el && el !== document.body; i++, el = el.parentElement) {
+      const n = findLabels(el, XP_LABEL).length;
+      const len = clean(el.textContent).length;
+      if (len > 8000) break;
+      if (n >= 2) return el;
+    }
+    return null;
+  }
+
+  // Splits a questions block into separate questions (list items, lines or "Q1." prefixes).
+  function splitQuestions(block) {
+    const items = [...block.querySelectorAll('li, p')].map(e => clean(e.textContent)).filter(t => t.length > 8);
+    if (items.length > 1) return items;
+    const t = clean(block.textContent);
+    const parts = t.split(/(?:^|\s)(?:Q\s?\d+[.):]|\d+[.)])\s+/).filter(p => p.length > 8);
+    return parts.length > 1 ? parts : (t.length > 8 ? [t] : []);
+  }
+
+  function extractExperiences() {
+    const cards = new Set();
+    findLabels(document, XP_LABEL).forEach(l => { const c = experienceCard(l); if (c) cards.add(c); });
+    // keep only the innermost cards (a page wrapper also "contains" every card)
+    const list = [...cards].filter(c => ![...cards].some(o => o !== c && c.contains(o)));
+
+    return list.map(card => {
+      const xp = { role: '', date: '', location: '', outcome: '', experience: '', difficulty: '',
+                   application: '', process: '', rounds: [], questions: [], tips: '' };
+      const heading = card.querySelector('h2, h3, h4, [class*="title" i], [data-test*="title" i]');
+      xp.role = clean(heading && heading.textContent)
+        .replace(/\s+interview(\s+questions?)?(\s+(and|&)\s+answers?)?$/i, '').slice(0, 120);
+
+      leafTexts(card).forEach(t => {
+        // AmbitionBox summary sentence: "I applied via Campus Placement and was interviewed in Nov 2024. ..."
+        if (!xp.application && /^i applied via/i.test(t)) {
+          xp.application = t;
+          const when = t.match(/interviewed (?:in|on|before)\s+([A-Z][a-z]{2,8}\s+\d{4})/);
+          if (when && !xp.date) xp.date = when[1];
+          return;
+        }
+        if (!xp.outcome && OUTCOME_RE.test(t)) xp.outcome = t;
+        else if (!xp.experience && EXPERIENCE_RE.test(t)) xp.experience = t;
+        else if (!xp.difficulty && DIFFICULTY_RE.test(t)) xp.difficulty = t.replace(/^difficulty[:\s]+/i, '');
+        if (!xp.date) { const m = t.match(DATE_RE); if (m && t.length < 60) xp.date = m[0]; }
+      });
+
+      findLabels(card, XP_LABEL).forEach(label => {
+        const name = clean(label.textContent).replace(/[:：]$/, '');
+        const value = valueAfter(label);
+        if (/^application$/i.test(name) || /^i applied via/i.test(name)) {
+          xp.application = /^i applied via/i.test(name) ? name : value;
+        } else if (/^(interview|interview process)$/i.test(name)) {
+          xp.process = value;
+        } else if (/^round\s*\d+/i.test(name)) {
+          xp.rounds.push({ name, detail: value });
+        } else if (/tips?$/i.test(name) || /^topics to prepare/i.test(name)) {
+          xp.tips = [xp.tips, value].filter(Boolean).join('\n');
+        } else if (/^interview questions?/i.test(name)) {
+          let block = label;
+          for (let i = 0; i < 3 && block && !block.nextElementSibling; i++) block = block.parentElement;
+          const qBlock = block && block.nextElementSibling;
+          (qBlock ? splitQuestions(qBlock) : [value]).forEach(text => {
+            if (text) xp.questions.push({ text, answers: qBlock ? answersNear(qBlock.querySelector('*') || qBlock) : [] });
+          });
+        }
+      });
+      return xp;
+    }).filter(xp => xp.process || xp.questions.length || xp.rounds.length || xp.application);
+  }
+
+  // Everything readable on this page. Questions found inside experiences are also listed on
+  // their own (with their answers) so the Q&A view has them too.
+  function collect() {
+    const experiences = extractExperiences();
+    const questions = extractQuestions();
+    const seen = new Map(questions.map(q => [q.text, q]));
+    experiences.forEach(xp => xp.questions.forEach(q => {
+      const have = seen.get(q.text);
+      if (have) q.answers.forEach(a => { if (!have.answers.includes(a)) have.answers.push(a); });
+      else { const nq = { text: q.text, answers: [...q.answers], role: xp.role || undefined }; seen.set(q.text, nq); questions.push(nq); }
+    }));
+    return { questions, reviews: extractReviews(), experiences };
+  }
+  if (window.__prepifyTest) window.__prepifyTest.collect = collect;   // test pages only
+
   function companyFromPage() {
     // "Stripe Interview Questions" / "Stripe Reviews" -> "Stripe"
     const h1 = document.querySelector('h1');
@@ -172,16 +271,15 @@
 
   btn.addEventListener('click', () => {
     btn.disabled = true;
-    const questions = extractQuestions();
-    const reviews = extractReviews();
-    if (!questions.length && !reviews.length) {
+    const { questions, reviews, experiences } = collect();
+    if (!questions.length && !reviews.length && !experiences.length) {
       showToast('Nothing recognised on this page. Select a question and right-click, then choose Save selection.');
       btn.disabled = false;
       return;
     }
     chrome.runtime.sendMessage({
       type: 'capture',
-      payload: { source: SOURCE, url: location.href, company_name: companyFromPage(), questions, reviews }
+      payload: { source: SOURCE, url: location.href, company_name: companyFromPage(), questions, reviews, experiences }
     }, (resp) => {
       btn.disabled = false;
       if (chrome.runtime.lastError || !resp) {
@@ -189,7 +287,7 @@
       } else if (!resp.ok) {
         showToast('Prepify: ' + resp.error);
       } else {
-        showToast(`Sent ${questions.length} questions and ${reviews.length} reviews to Prepify`);
+        showToast(`Sent ${experiences.length} experiences, ${questions.length} questions and ${reviews.length} reviews to Prepify`);
       }
     });
   });
@@ -274,12 +372,11 @@
       return fail(looksLikeLoginWall() ? 'login' : 'not-found');
     }
 
-    const questions = extractQuestions();
-    const reviews = extractReviews();
-    if (!questions.length && !reviews.length) return fail(looksLikeLoginWall() ? 'login' : 'empty');
+    const { questions, reviews, experiences } = collect();
+    if (!questions.length && !reviews.length && !experiences.length) return fail(looksLikeLoginWall() ? 'login' : 'empty');
     send({
       type: 'research:result', status: 'done', url: location.href,
-      payload: { source: SOURCE, url: location.href, company_name: job.company, questions, reviews }
+      payload: { source: SOURCE, url: location.href, company_name: job.company, questions, reviews, experiences }
     });
   }
 
