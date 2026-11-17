@@ -720,17 +720,50 @@ async function runSearch(q, src) {
 function rerender(src = currentSrc()) {
   if (!lastParsed || $('#results').classList.contains('hidden')) return;
   lastData = buildData();
+  if (src === 'JD' && jdNow()) return renderJdPage(lastData);
   if (!signedIn()) return renderGuest(lastData);
   render(lastData, src);
 }
 
 const companyName = (d) => d.company ? d.company.name : d.parsed.company;
-const INTENT_LABEL = { questions: 'Questions', process: 'Process', technical: 'Technical', hr: 'HR', reviews: 'Reviews' };
+const INTENT_LABEL = { questions: 'Questions', experiences: 'Experiences', process: 'Process', tips: 'Tips',
+                       salary: 'Salary', reviews: 'Reviews', technical: 'Technical', hr: 'HR' };
 
+// What Prepify understood from the search, as chips the user can correct.
 function understoodLine(p) {
-  $('#understood').innerHTML = p.company
-    ? `<span class="k">Company</span> <b>${esc(p.company)}</b> <span class="k">Role</span> <b>${esc(p.role || 'Any')}</b> <span class="k">Looking for</span> <b>${esc(p.intents.map(i => INTENT_LABEL[i] || i).join(', '))}</b>`
-    : '';
+  const el = $('#understood');
+  if (!p.company && !p.role) { el.innerHTML = ''; return; }
+  const chip = (k, v) => v ? `<span class="u-chip"><span class="k">${k}</span>${esc(v)}</span>` : '';
+  el.innerHTML = `
+    <span class="u-chips">
+      ${chip('Company', p.company || 'Not found')}
+      ${chip('Role', p.role || 'Any')}
+      ${chip('Level', p.level)}
+      ${chip('Experience', p.experience)}
+      ${chip('Location', p.location)}
+      ${chip('Year', p.year)}
+      ${chip('Rounds', (p.rounds || []).join(', '))}
+      ${chip('Topics', (p.topics || []).map(t => t.name).join(', '))}
+      ${chip('Looking for', (p.intents || []).map(i => INTENT_LABEL[i] || i).join(', '))}
+      <button class="linkbtn accent" id="u-edit" type="button">Edit</button>
+    </span>
+    ${p.corrected_from ? `<span class="u-note">Showing results for <b>${esc(p.company)}</b>. You typed “${esc(p.corrected_from)}”.</span>` : ''}
+    ${p.company_source === 'guess' ? `<span class="u-note">Prepify took “${esc(p.company)}” to be the company. If that's wrong, click Edit.</span>` : ''}
+    <form class="u-edit hidden" id="u-form">
+      <label>Company<input id="u-company" value="${esc(p.company || '')}" /></label>
+      <label>Role<input id="u-role" value="${esc(p.role || '')}" placeholder="Any" /></label>
+      <button class="btn small primary" type="submit">Apply</button>
+      <button class="linkbtn" type="button" id="u-cancel">Cancel</button>
+    </form>`;
+  $('#u-edit').onclick = () => { $('#u-form').classList.remove('hidden'); $('#u-company').focus(); };
+  $('#u-cancel').onclick = () => $('#u-form').classList.add('hidden');
+  $('#u-form').onsubmit = (e) => {
+    e.preventDefault();
+    const c = $('#u-company').value.trim().replace(/"/g, '');
+    const r = $('#u-role').value.trim().replace(/"/g, '');
+    const rest = (lastParsed ? lastParsed.query : '').replace(/\b(company|role):\s*("[^"]*"|\S+)\s*/gi, '').trim();
+    go([c && `company:"${c}"`, r && `role:"${r}"`, rest].filter(Boolean).join(' '), true, currentSrc());
+  };
 }
 
 function noCompany() {
@@ -752,6 +785,7 @@ function renderGuest(d) {
       Pulled data stays in your browser tab and is never stored on a server.
       <div><button class="btn primary" data-signin>Sign in with Google</button></div>
     </div>
+    ${jdBanner(d)}
     <div class="sources-head"><span>Sources for <b>${esc(name)}</b></span><span class="hint">Opens the site in a new tab</span></div>
     <div class="source-grid">${links.map(([label, s]) => `
       <a class="source-card link-card" href="${s.url(name)}" target="_blank" rel="noopener noreferrer">
@@ -773,8 +807,10 @@ function renderGuest(d) {
       <div class="row"><span>Mode</span><span class="off">Guest · links only</span></div>
       <button class="btn" data-signin>Sign in to pull sources</button>
       <p class="note">When you're signed in, Prepify reads Glassdoor and AmbitionBox in the background with your own Chrome and shows everything here.</p>
+      ${jdPanelHtml()}
     </div>`;
   $$('#panel [data-signin]').forEach(b => b.onclick = openSignin);
+  wireJdPanel(d);
 }
 
 // ---------- signed-in results: source boxes + a dedicated area per site ----------
@@ -934,7 +970,7 @@ function renderDashboard(d, groups) {
   const name = companyName(d);
   const withData = groups.filter(hasData);
   const anything = withData.length > 0;
-  let html = `<div class="sources-head">
+  let html = `${jdBanner(d)}<div class="sources-head">
       <span>Results from <b>${withData.length}</b> of ${groups.length} sources <span class="hint">· Click a box to open its page</span></span>
       ${anything ? '<button class="btn small" data-pdf="">Download PDF</button>' : ''}
     </div>
@@ -955,7 +991,26 @@ function renderDashboard(d, groups) {
     $$('#report [data-open-src]').forEach(b => b.onclick = () => openSource(b.dataset.openSrc));
   }
   wireCards(name);
+  wireJdBanner(d);
   wirePdf();
+}
+
+// Questions that fit the rounds or topics named in the search ("Amazon HR questions", "... SQL ...").
+const ROUND_SUBJECTS = {
+  HR: ['HR & Behavioral'], Behavioural: ['HR & Behavioral'], Managerial: ['HR & Behavioral', 'Projects & Experience'],
+  'System design': ['System Design'], Coding: ['Coding & DSA'], 'Online assessment': ['Coding & DSA', 'Aptitude & Reasoning'],
+  Aptitude: ['Aptitude & Reasoning'], Puzzles: ['Aptitude & Reasoning'], 'Machine coding': ['Coding & DSA', 'Languages & Frameworks'],
+  Technical: ['SQL & DBMS', 'OOP', 'System Design', 'Data & ML', 'Coding & DSA', 'OS & Networks', 'Cloud & DevOps', 'Languages & Frameworks', 'Projects & Experience'],
+  'Case study': ['Data & ML', 'Aptitude & Reasoning']
+};
+function searchFocus(d) {
+  const p = d.parsed;
+  const subjects = new Set((p.rounds || []).flatMap(r => ROUND_SUBJECTS[r] || []));
+  const topics = (p.topics || []).map(t => rxFor(t.pattern));
+  if (!subjects.size && !topics.length) return null;
+  const label = [...(p.rounds || []), ...(p.topics || []).map(t => t.name)].join(', ');
+  const qs = pulledQuestions(d).filter(q => subjects.has(subjectOf(q)) || topics.some(rx => rx.test(q.text)));
+  return { label, qs };
 }
 
 // Cross-source highlights shown under the boxes.
@@ -972,6 +1027,14 @@ function glance(d, withData) {
   const repeated = [...sites.values()].filter(e => e.sites.size > 1);
 
   let html = '<div class="glance">';
+  const focus = searchFocus(d);
+  if (focus) {
+    html += `<section class="section">
+        <h2>Your search: ${esc(focus.label)}</h2>
+        <p class="sub">${focus.qs.length ? `${plural(focus.qs.length, 'pulled question')} on this, from every source.` : 'None of the pulled questions are on this yet. Pull more sources, or add the job description for practice questions.'}</p>
+        ${focus.qs.length ? `<ol class="repeat-list">${focus.qs.slice(0, 15).map(q => `<li><span>${esc(q.text)}</span><small>${[...q.sources].map(esc).join(' + ')}</small></li>`).join('')}</ol>` : ''}
+      </section>`;
+  }
   html += `<section class="section">
       <h2>At a glance</h2>
       <div class="glance-grid">
@@ -1148,10 +1211,12 @@ function tabBody(k, g, groups) {
     groups.filter(o => o.name !== g.name).forEach(o => o.questions.forEach(q => elsewhere.set(norm(q.text), o.name)));
     const subjects = {};
     const qs = g.questions.map(q => { const subject = subjectOf(q); subjects[subject] = (subjects[subject] || 0) + 1; return { ...q, subject }; });
+    const inJd = jdNow() ? qs.filter(q => jdSkillsIn(q.text).length).length : 0;
     return `
       <div class="qa-tools">
         <div class="chips">
           <button class="chip-btn active" data-subject="">All <span>${qs.length}</span></button>
+          ${inJd ? `<button class="chip-btn jd" data-subject="__jd">Matches your JD <span>${inJd}</span></button>` : ''}
           ${Object.entries(subjects).sort((a, b) => b[1] - a[1]).map(([c, n]) => `<button class="chip-btn" data-subject="${esc(c)}">${esc(c)} <span>${n}</span></button>`).join('')}
         </div>
         <input class="qa-filter" id="qa-filter" placeholder="Filter questions…" aria-label="Filter questions" />
@@ -1199,7 +1264,7 @@ function wireTab(k, company) {
       const f = $('#qa-filter').value.trim().toLowerCase();
       let shown = 0;
       $$('.qa-card').forEach(c => {
-        const ok = (!subject || c.dataset.subject === subject) && (!f || c.dataset.text.includes(f));
+        const ok = (!subject || (subject === '__jd' ? c.dataset.jd === '1' : c.dataset.subject === subject)) && (!f || c.dataset.text.includes(f));
         c.classList.toggle('hidden', !ok);
         if (ok) shown += 1;
       });
@@ -1294,10 +1359,11 @@ function qaCard(q, i, site, alsoOn) {
   const first = answers[0];
   const rest = answers.slice(1);
   return `
-    <article class="qa-card" data-subject="${esc(q.subject)}" data-text="${esc(q.text.toLowerCase())}">
+    <article class="qa-card" data-subject="${esc(q.subject)}" data-text="${esc(q.text.toLowerCase())}" data-jd="${jdSkillsIn(q.text).length ? 1 : 0}">
       <div class="qa-q"><span class="qnum">Q${i + 1}</span><span>${esc(q.text)}</span></div>
       <div class="qa-tags">
         <span class="tag">${esc(q.subject)}</span>
+        ${jdTagsHtml(q.text)}
         ${q.round_type ? `<span class="tag">${esc(q.round_type)}</span>` : ''}
         ${q.difficulty ? `<span class="tag">${esc(q.difficulty)}</span>` : ''}
         ${alsoOn ? `<span class="tag good">Also on ${esc(alsoOn)}</span>` : ''}
@@ -1344,7 +1410,9 @@ function renderPanel(name, d) {
       <button class="linkbtn" id="panel-check">Run source check</button>
       <button class="linkbtn" id="panel-clear">Clear this session's data</button>
       <p class="note">Pulled data lives only in this browser tab. Closing the tab or signing out erases it.</p>
+      ${jdPanelHtml()}
     </div>`;
+  wireJdPanel(d);
   $('#panel-research').onclick = () => pullSources(name);
   $('#panel-check').onclick = () => runSourceCheck(name);
   $('#panel-clear').onclick = () => { clearStore(); Object.keys(pulls).forEach(k => delete pulls[k]); rerender(); };
@@ -1427,18 +1495,21 @@ async function downloadPdf(d, only = null) {
     y += 2;
   };
 
-  const name = companyName(d);
-  const groups = groupBySource(d).filter(hasData).filter(g => !only || g.name === only);
+  const name = companyName(d) || (jdNow() && jdNow().company) || 'Interview';
+  const groups = only === 'JD' ? [] : groupBySource(d).filter(hasData).filter(g => !only || g.name === only);
   const muted = [110, 110, 110];
   const accent = [196, 110, 50];
 
   write(`${name}: interview preparation`, { size: 20, bold: true, after: 6 });
   write(`Prepared with Prepify on ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}` +
         ` for "${d.query}"`, { size: 9, color: muted, after: 2 });
-  write('Sources: ' + groups.map(g => g.name === 'Official' ? `Official (${plural(g.official.length, 'page')})`
-        : `${g.name} (${plural(g.experiences.length, 'experience')}, ${plural(g.questions.length, 'question')})`).join(', '),
-        { size: 9, color: muted, after: 14 });
+  const sourceList = groups.map(g => g.name === 'Official' ? `Official (${plural(g.official.length, 'page')})`
+        : `${g.name} (${plural(g.experiences.length, 'experience')}, ${plural(g.questions.length, 'question')})`);
+  if (jdNow() && (!only || only === 'JD')) sourceList.unshift('your job description');
+  write('Sources: ' + sourceList.join(', '), { size: 9, color: muted, after: 14 });
   rule();
+
+  if (jdNow() && (!only || only === 'JD')) writeJdPdf({ write, writeRich, rule, ensure, accent, muted }, d);
 
   groups.sort((a, b) => (b.name === 'Official') - (a.name === 'Official'));
   groups.forEach((g, gi) => {
@@ -1526,7 +1597,7 @@ async function downloadPdf(d, only = null) {
   }
 
   const file = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'company';
-  doc.save(`${file}${only ? '-' + only.toLowerCase() : ''}-interview-preparation.pdf`);
+  doc.save(`${file}${only ? '-' + (only === 'JD' ? 'job-description' : only.toLowerCase()) : ''}-interview-preparation.pdf`);
 }
 
 // ---------- wiring ----------
@@ -1547,6 +1618,7 @@ $('#home-research').onclick = async () => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     $('#signin-modal').classList.add('hidden');
+    closeJdModal();
     if (loginQueue[0]) hideLoginPrompt(loginQueue[0].site);
   }
   if (e.key !== '/' || ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;

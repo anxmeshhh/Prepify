@@ -65,6 +65,37 @@ When you click a source box, the extension opens that site in a background tab a
 1. Go to https://www.reddit.com/prefs/apps, click **create another app** and choose **installed app**. Use `http://localhost:5000` as the redirect URI; it isn't used.
 2. Copy the client ID, the short string under the app name, into `.env` as `REDDIT_CLIENT_ID=...`, then restart Prepify. No secret and no Reddit login are needed. Results go straight to your browser and the server stores nothing.
 
+## Search understanding
+
+Prepify reads a query the way a person would and shows what it understood as chips under the search bar (**Edit** fixes any of them):
+
+| Piece | Examples |
+| --- | --- |
+| Company | aliases (`jp morgan` → JPMorgan Chase, `cts` → Cognizant, `infy` → Infosys), typos (`accenure` → Accenture), legal suffixes dropped (`Pvt Ltd`) |
+| Role | `SDE 2` → SDE-2, `ASE`, `TCS Ninja`, `GenC Next`, `senior data scientist`, `for the data analyst role` |
+| Level and experience | `fresher`, `off campus`, `intern`, `3 years experience`, `2 yoe` |
+| Location and year | `bangalore` → Bengaluru, `gurgaon` → Gurugram, `2025` |
+| Rounds | online assessment / NQT, aptitude, coding, technical, system design, machine coding, managerial, HR, behavioural, GD, case study |
+| Topics | SQL, Java, React, Kafka... (about 80 skills); the dashboard then lists the pulled questions on those topics |
+
+You can also write it explicitly: `company:"Target" role:"Data Analyst" interview questions`.
+
+## Job description analysis
+
+Click **Add job description** on the home page, the results page or the side panel. Paste the JD or upload it (PDF, DOCX or TXT), and optionally add your resume. Prepify analyses it on the server, sends the result back and keeps nothing; the result lives in your tab like everything else. Works in guest mode too.
+
+The JD page has these tabs:
+
+- **Overview:** role, seniority, experience, work mode, location, salary, education, academic cut-offs, bond, shifts, plus the responsibilities, requirements and nice-to-haves.
+- **Skills:** every skill the JD asks for, marked required, nice to have or expected (DSA and OOP for engineering roles, SQL for data roles), with the JD line it came from and what to revise.
+- **Likely rounds:** predicted from the role family, seniority and skills, each with the reason and what to focus on, next to the rounds candidates actually reported.
+- **Prep plan:** skills ordered by what the JD stresses and what was actually asked, with a checklist of topics (progress saved in the tab), the company's reported questions and practice questions with LeetCode or GeeksforGeeks links.
+- **Matching questions:** the pulled questions that touch the JD's skills, grouped by skill. Question cards everywhere get a *JD* tag and a *Matches your JD* filter.
+- **Resume match:** the share of required skills your resume shows, what's missing, and talking points.
+- **Questions to ask:** questions for the interviewer built from the JD, plus resume keywords.
+
+The JD analysis is also the first section of the PDF.
+
 ## Using results
 
 - **Clean presentation:** site text is tidied before display and in the PDF. Leftover page clutter ("Helpful", "Read more", "Answer question") is removed, run-together steps become numbered lists, bullets become lists, very long text is split into paragraphs, and repeated paragraphs are dropped.
@@ -78,8 +109,11 @@ When you click a source box, the extension opens that site in a background tab a
 
 | Path | What it is |
 | --- | --- |
-| `app.py` | Flask: query parser (`/api/parse`) and Google sign-in (`/api/auth/*`), no database |
-| `templates/search.html`, `static/search.*` | Search home page, results page and in-tab session store |
+| `app.py` | Flask routes: `/api/parse`, `/api/jd`, Google sign-in (`/api/auth/*`), official pages and Reddit; no database |
+| `query_parser.py` | Understanding search queries: company, role, level, location, rounds, topics |
+| `jd.py`, `skills.py` | Job description and resume analysis, and the skills list with revision topics and practice questions |
+| `tests/` | `python -m pytest tests` |
+| `templates/search.html`, `static/search.*`, `static/jd.js` | Search home page, results pages, JD page and in-tab session store |
 | `extension/` | Prepify Capture Chrome extension (Manifest V3) |
 
 ## Data sources and terms
