@@ -14,6 +14,16 @@ import app as prepify  # noqa: E402
 import jd  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def fresh_ledger(monkeypatch, tmp_path):
+    """Each test starts with an empty token ledger in its own file, and no cached results."""
+    monkeypatch.setattr(ai, 'USAGE_FILE', str(tmp_path / 'usage.json'))
+    ai._ledger.clear()
+    ai._results.clear()
+    yield
+    ai.end()
+
+
 @pytest.fixture
 def fake_ai(monkeypatch):
     """Route ai._call to a canned reply per schema; records what was sent."""
@@ -35,7 +45,6 @@ def fake_ai(monkeypatch):
 
     monkeypatch.setattr(ai, '_call', fake_call)
     monkeypatch.setattr(ai, '_guard_score', fake_guard)
-    ai._usage.clear()
     ai._parse_cache.clear()
     return {'sent': sent, 'guarded': guarded, 'set': lambda schema, reply: replies.__setitem__(id(schema), reply)}
 
@@ -219,13 +228,145 @@ def test_jd_endpoint_falls_back_to_the_rules(client, fake_ai):
 
 
 def test_status_is_in_the_auth_config(client, fake_ai):
-    assert client.get('/api/auth/config').get_json()['ai'] == {
-        'available': True, 'provider': 'Groq', 'model': ai.MODEL, 'model_name': 'GPT-OSS 120B', 'guard': True,
-        'files': False, 'limit': ai.DAILY_LIMIT, 'remaining': None}
+    s = client.get('/api/auth/config').get_json()['ai']
+    assert s['provider'] == 'Groq' and s['model_name'] == 'GPT-OSS 120B' and s['remaining'] is None
+    assert s['tokens'] == {'server_left': ai.DAILY_TOKENS, 'server_budget': ai.DAILY_TOKENS}
     sign_in(client)
-    assert client.get('/api/auth/config').get_json()['ai']['remaining'] == ai.DAILY_LIMIT
+    s = client.get('/api/auth/config').get_json()['ai']
+    assert s['remaining'] == ai.DAILY_LIMIT and s['tokens']['user_left'] == ai.USER_DAILY_TOKENS
 
 
 def test_rules_still_read_text_pdfs_and_reject_images_without_ai():
     with pytest.raises(jd.NeedsAI):
         jd.text_from_upload('scan.jpg', b'\xff\xd8\xff' + b'0' * 50)
+
+
+# ---------- the token budget ----------
+@pytest.fixture
+def fake_groq(monkeypatch):
+    """Replace only the HTTP call, so the budget code in _call runs for real. Each reply 'uses' 1,000 tokens."""
+    monkeypatch.setenv('GROQ_API_KEY', 'test-key')
+    monkeypatch.setattr(ai, '_guard_score', lambda t: 0.0)
+    calls = []
+
+    def post(body, timeout=120):
+        calls.append(body)
+        return {'choices': [{'finish_reason': 'stop', 'message': {'content': '{"items": []}'}}],
+                'usage': {'total_tokens': 1000}, 'model': body['model']}
+    monkeypatch.setattr(ai, '_post', post)
+    return calls
+
+
+SCHEMA = ai._obj({'items': ai._arr(ai.STR)})
+
+
+def test_actual_usage_is_counted_and_survives_a_restart(fake_groq):
+    ai.begin('a@example.com')
+    ai._call('system', 'hello', SCHEMA, max_tokens=2000)
+    b = ai.budget('a@example.com')
+    assert b['user_left'] == ai.USER_DAILY_TOKENS - 1000 and b['server_left'] == ai.DAILY_TOKENS - 1000
+    ai._ledger.clear()                                   # as if the server restarted
+    assert ai.budget('a@example.com')['user_left'] == ai.USER_DAILY_TOKENS - 1000
+
+
+def test_a_call_that_could_overrun_the_budget_is_never_sent(fake_groq, monkeypatch):
+    monkeypatch.setattr(ai, 'USER_DAILY_TOKENS', 3000)
+    ai.begin('a@example.com')
+    with pytest.raises(ai.AILimit):
+        ai._call('system', 'hello', SCHEMA, max_tokens=4000)      # worst case 4,000+ > 3,000 left
+    assert fake_groq == [] and ai.budget('a@example.com')['user_left'] == 3000   # nothing held back
+
+
+def test_background_work_stops_before_eating_into_the_users_share(fake_groq, monkeypatch):
+    monkeypatch.setattr(ai, 'USER_DAILY_TOKENS', 10000)
+    ai.begin('a@example.com', background=True)
+    ai._call('system', 'hello', SCHEMA, max_tokens=2000)          # 10,000 -> 9,000 left: fine
+    with pytest.raises(ai.AILimit, match='Paused'):
+        ai._call('system', 'hello', SCHEMA, max_tokens=5000)      # would leave less than 40%
+    ai.begin('a@example.com')                                     # something the user asked for: allowed
+    ai._call('system', 'hello', SCHEMA, max_tokens=5000)
+
+
+def test_server_budget_is_shared_by_everyone(fake_groq, monkeypatch):
+    monkeypatch.setattr(ai, 'DAILY_TOKENS', 2600)
+    ai.begin('a@example.com')
+    ai._call('system', 'hello', SCHEMA, max_tokens=1000)          # 1,000 used; 1,600 left
+    with pytest.raises(ai.AILimit):
+        ai.begin('b@example.com')                                 # under 1,500 margin? no: 1,600 is fine
+        ai._call('system', 'hello', SCHEMA, max_tokens=1600)      # worst case > 1,600 left
+
+
+def test_groq_daily_limit_closes_ai_for_the_day(monkeypatch):
+    monkeypatch.setenv('GROQ_API_KEY', 'test-key')
+
+    class R:
+        status_code = 429
+        ok = False
+        headers = {}
+
+        def json(self):
+            return {'error': {'message': 'Rate limit reached on tokens per day (TPD): Limit 200000'}}
+    monkeypatch.setattr('requests.post', lambda *a, **k: R())
+    with pytest.raises(ai.AILimit):
+        ai._post({'model': ai.MODEL})
+    assert ai.budget()['server_left'] == 0
+    with pytest.raises(ai.AILimit):
+        ai.begin('a@example.com')
+
+
+# ---------- part B ----------
+def test_brief_keeps_only_items_with_real_sources(fake_ai):
+    fake_ai['set'](ai.BRIEF_SCHEMA, {
+        'overview': 'Three rounds over two weeks.',
+        'process': [{'step': 'Machine coding', 'detail': '90 minutes.', 'sources': ['X1']},
+                    {'step': 'Made up round', 'detail': '...', 'sources': ['X9']}],
+        'focus': [{'topic': 'Payments', 'detail': 'Idempotency.', 'sources': ['[Q1]', 'X1']}],
+        'tips': [{'tip': 'Know Kafka.', 'sources': []}], 'caveat': 'Based on one experience.'})
+    b = ai.company_brief('Razorpay', '', [{'id': 'X1', 'source': 'Glassdoor', 'role': 'SE II', 'date': '2025',
+                                           'outcome': 'Offer', 'text': 'Machine coding then design.'}],
+                         [{'id': 'Q1', 'text': 'Design payment retries', 'sources': ['Glassdoor']}])
+    assert [p['step'] for p in b['process']] == ['Machine coding']        # X9 doesn't exist
+    assert b['focus'][0]['sources'] == ['Q1', 'X1'] and b['tips'] == []    # a tip with no source is dropped
+
+
+def test_resume_coach_drops_quotes_that_arent_in_the_resume(fake_ai):
+    resume = 'Built a payments reconciliation service in Java and Spring Boot handling 2M events a day.\n' * 2
+    fake_ai['set'](ai.RESUME_SCHEMA, {
+        'fit_summary': 'Strong backend match.',
+        'talking_points': [{'skill': 'Java', 'point': 'Scale', 'evidence': 'payments reconciliation service in Java'},
+                           {'skill': 'Kafka', 'point': 'Streams', 'evidence': 'led the Kafka migration'}],
+        'stories': [], 'rewrites': [{'before': 'Wrote some code', 'after': 'x', 'why': 'y'}], 'gaps': []})
+    r = ai.resume_coach({'title': 'SE', 'skills': [{'name': 'Java', 'level': 'required'}]}, resume)
+    assert [t['skill'] for t in r['talking_points']] == ['Java'] and r['rewrites'] == []
+
+
+def test_answers_are_cached_so_asking_again_is_free(client, fake_ai):
+    sign_in(client)
+    fake_ai['set'](ai.ANSWER_SCHEMA, {'items': [{'id': 'a1', 'answer': 'Use two pointers.', 'code': '',
+                                                  'key_points': ['O(n)'], 'follow_ups': ['Why?']}]})
+    body = {'company': 'Razorpay', 'role': '', 'items': [{'id': 'a1', 'text': 'Reverse a linked list.'}]}
+    first = client.post('/api/ai/answers', json=body).get_json()
+    second = client.post('/api/ai/answers', json=body).get_json()
+    assert first['items'][0]['answer'] == 'Use two pointers.' and second.get('cached')
+    assert len(fake_ai['sent']) == 1 and second['ai']['remaining'] == ai.DAILY_LIMIT - 1
+
+
+REWRITE_CASES = [   # (before, after, kept?)
+    ('Built a payments reconciliation service in Java and Spring Boot handling 2M events a day',
+     'Built a payments reconciliation service in Java and Spring Boot handling [N] events a day', False),   # lost "2M"
+    ('Built a payments reconciliation service in Java and Spring Boot handling 2M events a day',
+     'Built a Java and Spring Boot payments reconciliation service handling 2M events a day, cutting mismatches by [X%]', True),
+    ('Consumed Kafka events with idempotent consumers to avoid double processing',
+     'Implemented idempotent Kafka consumers to ensure exactly-once processing', False),                     # new claim
+    ('Worked on backend APIs', 'Developed backend APIs for payment processing', False),                       # new scope
+    ('Worked on backend APIs', 'Built and maintained [N] backend APIs serving [X] requests a day', True),
+    ('Worked on backend APIs', 'Built [N] backend APIs on Kubernetes serving [X] requests a day', False),      # new tool
+]
+
+
+@pytest.mark.parametrize('before,after,kept', REWRITE_CASES)
+def test_resume_rewrites_only_rephrase(fake_ai, before, after, kept):
+    resume = '\n'.join(b for b, _, _ in REWRITE_CASES) + '\nSkills: Java, Spring Boot, MySQL, Docker, Git, Kafka'
+    fake_ai['set'](ai.RESUME_SCHEMA, {'fit_summary': '', 'talking_points': [], 'stories': [], 'gaps': [],
+                                      'rewrites': [{'before': before, 'after': after, 'why': ''}]})
+    assert bool(ai.resume_coach({'skills': []}, resume)['rewrites']) is kept

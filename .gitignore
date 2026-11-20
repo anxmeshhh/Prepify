@@ -19,3 +19,5 @@ Thumbs.db
 # Packaging (python build_exe.py)
 build/
 dist/
+.prepify-usage.json
+.prepify-usage.json.tmp

@@ -26,6 +26,8 @@ except ImportError:
     pass
 
 import ai  # noqa: E402  (reads its settings from the environment loaded above)
+
+ai.USAGE_FILE = os.path.join(HOME_DIR, '.prepify-usage.json')     # the AI token ledger: counts only, no content
 import jd as jd_reader  # noqa: E402
 from query_parser import parse_query  # noqa: E402
 
@@ -81,7 +83,7 @@ def analyse_jd():
         else:
             text = request.form.get('jd_text', '')
         resume_text = ''
-        rf = request.files.get('resume_file')
+        rf = request.files.get('resume_file')    # an uploaded resume's text goes back to the tab, for the AI resume match
         if rf and rf.filename:
             try:
                 resume_text = jd_reader.text_from_upload(rf.filename, rf.read(jd_reader.MAX_BYTES + 1))
@@ -95,13 +97,15 @@ def analyse_jd():
     ai_note = None
     if use_ai:
         try:
-            ai.charge(user['email'])
+            ai.begin(user['email'])
             try:
                 analysis, _ = ai.read_jd(text, resume_text)
             except Exception:
                 ai.refund(user['email'])
                 raise
-            return jsonify({'analysis': analysis, 'text': text if jd_file else None, 'ai': ai.status(user)})
+            ai.end()
+            return jsonify({'analysis': analysis, 'text': text if jd_file else None,
+                            'resume_text': resume_text if rf and rf.filename else None, 'ai': ai.status(user)})
         except jd_reader.JDError as e:
             return jsonify({'error': str(e)}), 400
         except Exception as e:                       # AI failed or the text was flagged: the rules still read it
@@ -113,22 +117,27 @@ def analyse_jd():
     except jd_reader.JDError as e:
         return jsonify({'error': str(e)}), 400
     return jsonify({'analysis': result, 'text': text if jd_file else None, 'ai_error': ai_note,
-                    'ai': ai.status(user)})
+                    'resume_text': resume_text if rf and rf.filename else None, 'ai': ai.status(user)})
 
 
-# ---------- AI assist (ai.py): signed-in users only, with a daily limit per user ----------
-def _ai_begin():
-    """The signed-in user, after counting one AI request; or an error response."""
+# ---------- AI assist (ai.py): signed-in users only, within a daily token budget ----------
+def _ai_begin(background=False):
+    """The signed-in user, after checking and counting against the AI budget; or an error response."""
     user = current_user()
     if not user:
         return None, (jsonify({'error': 'Sign in to use AI assist.'}), 401)
     if not ai.available():
         return None, (jsonify({'error': 'AI assist is not set up on this server.', 'ai': ai.status(user)}), 503)
     try:
-        ai.charge(user['email'])
+        ai.begin(user['email'], background)
     except ai.AILimit as e:
-        return None, (jsonify({'error': str(e), 'ai': ai.status(user)}), 429)
+        return None, (jsonify({'error': str(e), 'paused': background, 'ai': ai.status(user)}), 429)
     return user, None
+
+
+def _ai_done(user, payload):
+    ai.end()
+    return jsonify({**payload, 'ai': ai.status(user)})
 
 
 def _ai_failed(user, e, what):
@@ -147,14 +156,14 @@ def ai_questions():
     if not isinstance(items, list) or not items:
         return jsonify({'error': 'no questions sent'}), 400
     known = body.get('known') if isinstance(body.get('known'), list) else []
-    user, err = _ai_begin()
+    user, err = _ai_begin(background=bool(body.get('background')))
     if err:
         return err
     try:
         out, model = ai.tidy_questions(str(body.get('company') or ''), items, known)
     except Exception as e:
         return _ai_failed(user, e, 'question tidying')
-    return jsonify({**out, 'model': model, 'ai': ai.status(user)})
+    return _ai_done(user, {**out, 'model': model})
 
 
 @app.route('/api/ai/parse', methods=['POST'])
@@ -172,7 +181,64 @@ def ai_parse():
         parsed = ai.parse_search(q)
     except Exception as e:
         return _ai_failed(user, e, 'search reading')
-    return jsonify({'query': q, 'parsed': parsed, 'ai': ai.status(user)})
+    return _ai_done(user, {'query': q, 'parsed': parsed})
+
+
+def _list(v, n):
+    return v[:n] if isinstance(v, list) else []
+
+
+def _cached_or_run(kind, payload, run, what):
+    """Serve a result already made for exactly this input; otherwise make it within the budget."""
+    user = current_user()
+    hit = ai.cached(kind, payload)
+    if hit and user:
+        return jsonify({**hit, 'cached': True, 'ai': ai.status(user)})
+    user, err = _ai_begin()
+    if err:
+        return err
+    try:
+        result = ai.remember(kind, payload, run())
+    except Exception as e:
+        return _ai_failed(user, e, what)
+    return _ai_done(user, result)
+
+
+@app.route('/api/ai/brief', methods=['POST'])
+def ai_brief():
+    b = request.get_json(silent=True) or {}
+    payload = {'company': str(b.get('company') or '')[:100], 'role': str(b.get('role') or '')[:80],
+               'experiences': [{k: str(x.get(k) or '')[:2000] for k in ('id', 'source', 'role', 'date', 'outcome', 'text')}
+                               for x in _list(b.get('experiences'), 40) if isinstance(x, dict)],
+               'questions': [{'id': str(q.get('id') or '')[:20], 'text': str(q.get('text') or '')[:400],
+                              'sources': [str(s)[:30] for s in _list(q.get('sources'), 5)]}
+                             for q in _list(b.get('questions'), 80) if isinstance(q, dict)]}
+    if not payload['company'] or not (payload['experiences'] or payload['questions']):
+        return jsonify({'error': 'Pull some interview experiences first.'}), 400
+    return _cached_or_run('brief', payload, lambda: ai.company_brief(**payload), 'company brief')
+
+
+@app.route('/api/ai/answers', methods=['POST'])
+def ai_answers():
+    b = request.get_json(silent=True) or {}
+    payload = {'company': str(b.get('company') or '')[:100], 'role': str(b.get('role') or '')[:80],
+               'items': [{'id': str(i.get('id') or '')[:20], 'text': str(i.get('text') or '')[:400]}
+                         for i in _list(b.get('items'), ai.MAX_ANSWERS) if isinstance(i, dict)]}
+    if not payload['items']:
+        return jsonify({'error': 'no questions sent'}), 400
+    return _cached_or_run('answers', payload, lambda: ai.model_answers(**payload), 'model answers')
+
+
+@app.route('/api/ai/resume', methods=['POST'])
+def ai_resume():
+    b = request.get_json(silent=True) or {}
+    jd = b.get('jd') if isinstance(b.get('jd'), dict) else {}
+    payload = {'jd': {'title': str(jd.get('title') or '')[:100], 'company': str(jd.get('company') or '')[:100],
+                      'skills': [{'name': str(s.get('name') or '')[:60], 'level': str(s.get('level') or '')[:12]}
+                                 for s in _list(jd.get('skills'), 30) if isinstance(s, dict)],
+                      'responsibilities': [str(r)[:200] for r in _list(jd.get('responsibilities'), 8)]},
+               'resume_text': str(b.get('resume_text') or '')[:ai.RESUME_CHARS]}
+    return _cached_or_run('resume', payload, lambda: ai.resume_coach(**payload), 'resume match')
 
 
 # ---------- Sign in with Google (optional) ----------

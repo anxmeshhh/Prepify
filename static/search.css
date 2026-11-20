@@ -921,3 +921,81 @@ a.btn:hover { text-decoration: none; }
   .ai-strip-actions { margin-left: 0; width: 100%; }
   .ai-strip-actions .btn { flex: 1; }
 }
+
+/* ---------- prep content (part B) ---------- */
+/* AI pieces share one look: the blue of the AI mark, labelled "AI" */
+.tag.ai { color: var(--link); border-color: rgba(92, 156, 245, 0.45); vertical-align: middle; margin-left: 6px; }
+.cost { color: inherit; opacity: .7; font-weight: 400; }
+.btn .cost, .linkbtn .cost { margin-left: 2px; }
+
+/* the budget bar in the side panel */
+.ai-budget { height: 6px; background: var(--element); border-radius: 999px; overflow: hidden; margin: 2px 0 4px; }
+.ai-budget span { display: block; height: 100%; background: var(--link); transition: width .3s; }
+
+/* company brief */
+.brief .btn { margin-top: 12px; }
+.brief-overview { font-size: 15px; margin: 8px 0 16px; max-width: 75ch; }
+.brief-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-bottom: 18px; }
+.brief-list li { font-size: 14px; }
+.brief-list b { color: var(--text); margin-right: 4px; }
+.brief-h { font-size: 14px; font-weight: 700; margin: 16px 0 8px; }
+.brief-foot { font-size: 12px; color: var(--faint); margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
+.brief-foot .linkbtn { font-size: 12px; }
+.brief-stale { color: var(--warn); margin-right: 6px; }
+.cite {
+  font: inherit; font-size: 10px; font-weight: 700; color: var(--link); background: rgba(92, 156, 245, 0.1);
+  border: 1px solid rgba(92, 156, 245, 0.35); border-radius: 4px; padding: 0 5px; margin-left: 3px; cursor: pointer;
+  vertical-align: 1px; line-height: 16px;
+}
+.cite:hover { background: rgba(92, 156, 245, 0.22); }
+
+/* AI-written model answers: same card as a site answer, blue and labelled */
+.answer.ai-answer { border-left-color: var(--link); }
+.answer.ai-answer .a-label { color: var(--link); }
+.ai-answer-btn { display: block; margin: 10px 0 0 44px; font-size: 13px; }
+pre.code {
+  margin-top: 10px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+  font: inherit; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text);
+}
+.ai-more { margin-top: 10px; font-size: 13px; }
+.ai-more summary { cursor: pointer; color: var(--link); font-size: 12px; font-weight: 700; }
+.ai-more .jd-list { font-size: 13px; margin: 6px 0; }
+.ai-more .xp-label { margin-top: 8px; color: var(--link); }
+
+/* resume coach */
+.coach-privacy { font-size: 12px; color: var(--muted); background: var(--element); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; margin: 10px 0 12px; max-width: 75ch; }
+.coach-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.coach-grid .jd-card p { font-size: 14px; margin-top: 4px; }
+.star { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; font-size: 14px; margin-top: 10px; }
+.star dt { color: var(--accent); font-weight: 700; font-size: 12px; padding-top: 2px; }
+.rewrite { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 16px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.rewrite .before { color: var(--faint); text-decoration: line-through; }
+.rewrite .after { color: var(--text); border-left: 2px solid var(--good); padding-left: 10px; }
+.rewrite .why { font-size: 12px; color: var(--muted); }
+
+/* schedule up to the interview */
+.sched-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; margin: 12px 0 16px; }
+.sched-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.sched-form input, .sched-form select {
+  font: inherit; font-size: 13px; color: var(--text); background: var(--bg); color-scheme: dark;
+  border: 1px solid var(--border-strong); border-radius: 6px; padding: 6px 10px; height: 34px;
+}
+.sched-form input:focus, .sched-form select:focus { outline: none; border-color: var(--accent); }
+.sched { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.sched-day { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+.sched-day.today { border-color: var(--accent); }
+.sched-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; font-size: 13px; }
+.sched-head span { color: var(--muted); font-size: 12px; }
+.sched-day.today .sched-head b { color: var(--accent); }
+.sched-list { grid-template-columns: 1fr; font-size: 13px; }
+.schedule .notice { margin-top: 12px; }
+
+@media (max-width: 640px) {
+  .ai-answer-btn { margin-left: 0; }
+  .star { grid-template-columns: 1fr; gap: 2px; }
+  .star dd { margin-bottom: 6px; }
+  .sched-form label { flex: 1 1 140px; }
+}
+/* code and operators read exactly as typed: no "!=" turning into "≠" */
+body { font-variant-ligatures: none; }
+.section.coach { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border); }

@@ -1006,6 +1006,7 @@ function renderDashboard(d, groups) {
     html += glance(d, withData);
     $('#report').innerHTML = html;
     $$('#report [data-open-src]').forEach(b => b.onclick = () => openSource(b.dataset.openSrc));
+    wireBrief(d);
   }
   wireCards(name);
   wireJdBanner(d);
@@ -1044,7 +1045,7 @@ function glance(d, withData) {
   });
   const repeated = [...sites.values()].filter(e => e.sites.size > 1);
 
-  let html = '<div class="glance">';
+  let html = '<div class="glance">' + briefHtml(d);
   const focus = searchFocus(d);
   if (focus) {
     html += `<section class="section">
@@ -1238,6 +1239,7 @@ function tabBody(k, g, groups) {
           ${Object.entries(subjects).sort((a, b) => b[1] - a[1]).map(([c, n]) => `<button class="chip-btn" data-subject="${esc(c)}">${esc(c)} <span>${n}</span></button>`).join('')}
         </div>
         <input class="qa-filter" id="qa-filter" placeholder="Filter questions…" aria-label="Filter questions" />
+        ${aiAnswerBatchButton(qs)}
       </div>
       <div class="qa-list">${qs.map((q, i) => qaCard(q, i, g.name, elsewhere.get(qKey(q)))).join('')}</div>
       <p class="qa-none hidden" id="qa-none">No questions match.</p>`;
@@ -1294,6 +1296,7 @@ function wireTab(k, company) {
       apply();
     });
     $('#qa-filter').oninput = apply;
+    wireAiAnswers();
   }
 
   if (k === 'experiences') {
@@ -1399,7 +1402,7 @@ function qaCard(q, i, site, alsoOn) {
              <div class="more-answers hidden">${rest.map((a, j) =>
                `<div class="answer"><div class="a-label">Answer ${j + 2}</div>${richText(a)}</div>`).join('')}</div>
              <button class="linkbtn more-btn">Show ${plural(rest.length, 'more answer')}</button>` : ''}`
-        : `<div class="answer none">No answer shown on ${esc(site)}</div>`}
+        : `<div class="answer none">No answer shown on ${esc(site)}</div>${aiAnswerBlock(q, site)}`}
       ${practiceLinks(q)}
     </article>`;
 }
@@ -1537,6 +1540,7 @@ async function downloadPdf(d, only = null) {
   rule();
 
   if (jdNow() && (!only || only === 'JD')) writeJdPdf({ write, writeRich, rule, ensure, accent, muted }, d);
+  if (!only) writeBriefPdf({ write, rule, ensure, accent, muted });
 
   groups.sort((a, b) => (b.name === 'Official') - (a.name === 'Official'));
   groups.forEach((g, gi) => {
@@ -1591,7 +1595,9 @@ async function downloadPdf(d, only = null) {
           num += 1;
           write(`Q${num}. ${q.text}`, { bold: true, indent: 10, after: 2 });
           const answers = q.answers || [];
+          const aiA = !answers.length && aiAnswerFor(q);
           if (answers.length) answers.forEach((a, ai) => writeRich(`Answer${answers.length > 1 ? ' ' + (ai + 1) : ''}`, a, { indent: 26, color: muted }));
+          else if (aiA) writeRich(`AI-written model answer (not from ${g.name})`, aiA.answer + (aiA.code ? '\n' + aiA.code : ''), { indent: 26, color: muted });
           else write(`No answer shown on ${g.name}.`, { indent: 26, color: [160, 160, 160], italic: true, after: 3 });
           y += 3;
         });

@@ -7,7 +7,7 @@
    Results are kept in this tab with the pulled data. Uses helpers from search.js at call time. */
 
 const AI_PREF_KEY = 'prepify.ai.v1';          // this browser's choice: 'on' | 'off' (a per-viewer convenience)
-const AI_BATCH = 100;
+const AI_BATCH = 40;                          // the server's per-call limit (fits Groq's tokens-per-minute)
 const ai = { busy: false, state: {}, showOriginal: false, timer: null };
 
 function aiPref() {
@@ -30,9 +30,17 @@ function aiNoteStatus(s) {
   if (!s) return;
   auth.ai = s;
   $$('[data-ai-left]').forEach(el => { el.textContent = aiLeftText(); });
+  $$('[data-ai-bar]').forEach(el => { el.style.width = aiLeftPct() + '%'; });
 }
-const aiLeftText = () => auth.ai && auth.ai.remaining !== null && auth.ai.remaining !== undefined
-  ? `${auth.ai.remaining} of ${auth.ai.limit}` : '–';
+const aiLeftText = () => {
+  const t = auth.ai && auth.ai.tokens;
+  if (!t || t.user_left === undefined) return '–';
+  return `${fmtTokens(t.user_left)} of ${fmtTokens(t.user_budget)}`;
+};
+const aiLeftPct = () => {
+  const t = auth.ai && auth.ai.tokens;
+  return t && t.user_budget ? Math.round(100 * t.user_left / t.user_budget) : 0;
+};
 
 // ---------- consent: what AI assist does and what it sends ----------
 function openAiConsent(then) {
@@ -63,10 +71,12 @@ function openAiConsent(then) {
       <div class="ai-sends">
         <div class="xp-label">What is sent</div>
         <p>The questions you pull, any job description you add, and searches Prepify can't read are sent to
-          ${esc(aiProvider())}'s API to be processed. Your resume is not sent. The results come straight back to this tab,
+          ${esc(aiProvider())}'s API to be processed. Your resume is sent only when you ask for the deeper resume match. The results come straight back to this tab,
           and Prepify stores nothing on its server.${auth.ai && auth.ai.guard ? ' Text is screened first, and anything that tries to give the AI instructions is left out.' : ''}</p>
       </div>
-      <p class="modal-note">Up to ${esc(auth.ai ? auth.ai.limit : 60)} AI requests a day. Turn it off any time in the side panel and Prepify goes back to its standard reading.</p>
+      <p class="modal-note">AI assist works within a daily budget (${esc(auth.ai && auth.ai.tokens && auth.ai.tokens.user_budget ? fmtTokens(auth.ai.tokens.user_budget) : '50K')} tokens for you) and stops before the provider's limit.
+        Only the question tidy-up runs on its own, and it pauses when less than 40% of your budget is left; everything else runs when you click, with its cost shown.
+        Turn it off any time in the side panel.</p>
       <div class="login-actions">
         <button class="btn primary" data-ai-accept>Turn on AI assist</button>
         <button class="linkbtn" data-ai-decline>Not now</button>
@@ -116,7 +126,8 @@ function aiPanelHtml() {
     <h3>AI assist</h3>
     <div class="kind">${esc(aiModelName())} · ${esc(aiProvider())}</div>
     <div class="row"><span>Status</span><span class="${on ? 'ok' : 'off'}">${on ? 'On' : 'Off'}</span></div>
-    <div class="row"><span>Requests left today</span><span data-ai-left>${aiLeftText()}</span></div>
+    <div class="row"><span>AI tokens left</span><span data-ai-left>${aiLeftText()}</span></div>
+    <div class="ai-budget" title="Prepify stops before the AI provider's daily limit"><span data-ai-bar style="width:${aiLeftPct()}%"></span></div>
     <button class="btn" data-ai-toggle>${on ? 'Turn off AI assist' : 'Turn on AI assist'}</button>`;
 }
 
@@ -192,11 +203,11 @@ async function aiAutoTidy() {
   const todo = aiTodo(store.companies[key]);
   if (!todo.length) return;
   const st = ai.state[key];
-  if (st && st.status === 'error' && st.todoCount === todo.length) return;   // retry only by hand, or when more arrive
+  if (st && (st.status === 'error' || st.status === 'paused') && st.todoCount === todo.length) return;   // by hand, or when more arrive
   await aiTidy(key);
 }
 
-async function aiTidy(key) {
+async function aiTidy(key, manual = false) {
   const c = store.companies[key];
   if (!c) return;
   const todo = aiTodo(c);
@@ -213,6 +224,7 @@ async function aiTidy(key) {
         method: 'POST',
         body: JSON.stringify({
           company: c.name,
+          background: !manual,                        // automatic work stops early to keep the user's budget
           items: chunk.map((x, j) => ({ id: 'n' + j, text: x.text })),
           known: reps.map(([, a], j) => ({ id: 'k' + j, text: a.t }))
         })
@@ -241,7 +253,7 @@ async function aiTidy(key) {
     st.status = 'done';
   } catch (e) {
     aiNoteStatus(e.body && e.body.ai);
-    Object.assign(st, { status: 'error', error: e.message, todoCount: aiTodo(c).length });
+    Object.assign(st, { status: e.body && e.body.paused ? 'paused' : 'error', error: e.message, todoCount: aiTodo(c).length });
   }
   ai.busy = false;
   rerender();
@@ -270,6 +282,13 @@ function aiStripHtml(d) {
         <span>${st.total > AI_BATCH ? `${st.done} of ${st.total} done. ` : ''}Fixing the text, merging duplicates and tagging rounds and difficulty.</span></div>
     </div>`;
   }
+  if (st.status === 'paused' && sum.tidied < sum.total) {
+    const n = sum.total - sum.tidied;
+    return `<div class="ai-strip" id="ai-strip">${mark}
+      <div class="ai-strip-text"><b>Tidying paused to save your AI budget</b><span>${plural(n, 'question')} not tidied yet. Automatic tidying stops when less than 40% of today's budget is left.</span></div>
+      <div class="ai-strip-actions"><button class="btn small" data-ai-retry>Tidy now <span class="cost">· ~${fmtTokens(500 + 70 * n)} tokens</span></button></div>
+    </div>`;
+  }
   if (st.status === 'error' && sum.tidied < sum.total) {
     return `<div class="ai-strip error" id="ai-strip" role="alert">${mark}
       <div class="ai-strip-text"><b>AI couldn't tidy the questions</b><span>${esc(st.error)}</span></div>
@@ -289,7 +308,7 @@ function wireAiStrip() {
   const b = (sel, fn) => $$(sel).forEach(x => x.onclick = fn);
   b('[data-ai-offer]', () => openAiConsent());
   b('[data-ai-later]', () => { setAiPref('off'); rerender(); });
-  b('[data-ai-retry]', () => { const k = aiCompanyKey(); if (k) { delete ai.state[k]; aiTidy(k); } });
+  b('[data-ai-retry]', () => { const k = aiCompanyKey(); if (k) { delete ai.state[k]; aiTidy(k, true); } });
   b('[data-ai-original]', () => { ai.showOriginal = !ai.showOriginal; rerender(); });
 }
 

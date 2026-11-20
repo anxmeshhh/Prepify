@@ -182,7 +182,8 @@ async function submitJd() {
     store.jd = {
       analysis: body.analysis,
       text: jdFile ? (body.text || null) : jdText,
-      resumeText: rFile ? null : (rText || null),
+      schedule: jdNow() && jdNow().schedule,      // a replaced JD keeps the interview date
+      resumeText: rFile ? (body.resume_text || null) : (rText || null),
       created_at: new Date().toISOString(),
       done: {}
     };
@@ -418,6 +419,7 @@ function jdTabBody(k, d, ctx) {
         ${prog.done ? '<button class="linkbtn" data-plan-reset>Reset</button>' : ''}
       </div>
       <p class="sub">Ordered by what the JD stresses and what candidates were actually asked. Tick topics off as you go; progress stays in this tab.</p>
+      ${scheduleHtml(d)}
       ${tiers.map(([tier, items]) => `
         <section class="section">
           <h2>${esc(tier)}</h2>
@@ -505,10 +507,11 @@ function jdTabBody(k, d, ctx) {
         }).join('')}</div></section>` : ''}
       ${r.missing_preferred.length ? `<section class="section"><h2>Nice to have, not on your resume</h2>
         <div class="chips static">${r.missing_preferred.map(n => pill(n)).join('')}</div></section>` : ''}
-      ${r.matched.length ? `<section class="section"><h2>Talking points</h2>
+      ${r.matched.length && !(jdNow().aiResume) ? `<section class="section"><h2>Talking points</h2>
         <p class="sub">For each skill you share with the JD, prepare one concrete example: what you built, the decision you made and the result.</p>
         ${jdList(r.matched.slice(0, 8).map(n => `${n}: where did you use it, and what would you do differently now?`))}</section>` : ''}
-      <button class="btn" data-jd-resume>Update resume</button>`;
+      <button class="btn" data-jd-resume>Update resume</button>
+      ${resumeCoachHtml()}`;
   }
 
   // ask
@@ -534,14 +537,20 @@ function wireJdTab(k, d) {
       $$('#tab-body .skill-cat').forEach(sec => sec.classList.toggle('hidden', !sec.querySelector('.skill-card:not(.hidden)')));
     });
   }
+  if (k === 'resume') wireResumeCoach(d);
   if (k === 'plan') {
+    wireSchedule(d);
     $$('#tab-body [data-done]').forEach(cb => cb.onchange = () => {
       const jd = jdNow();
       if (cb.checked) jd.done[cb.dataset.done] = true; else delete jd.done[cb.dataset.done];
       saveStore();
-      const item = cb.closest('.plan-item');
-      const boxes = item.querySelectorAll('[data-done]');
-      item.querySelector('.plan-count').textContent = `${[...boxes].filter(x => x.checked).length}/${boxes.length}`;
+      // the same topic can be in the schedule and in the list below: keep both ticks in step
+      $$('#tab-body [data-done]').forEach(x => { if (x.dataset.done === cb.dataset.done) x.checked = cb.checked; });
+      $$('#tab-body .plan-item').forEach(item => {
+        const boxes = item.querySelectorAll('[data-done]');
+        const count = item.querySelector('.plan-count');
+        if (count) count.textContent = `${[...boxes].filter(x => x.checked).length}/${boxes.length}`;
+      });
       const prog = planProgress(d);
       $('.plan-progress .bar span').style.width = (prog.total ? Math.round(100 * prog.done / prog.total) : 0) + '%';
       $('.plan-progress b').textContent = prog.done;
@@ -659,6 +668,7 @@ function writeJdPdf(api, d) {
     writeRich(null, r.focus.map(x => '- ' + x).join('\n'), { indent: 14 });
   });
 
+  writeSchedulePdf(api, d);
   const { tiers } = jdPlan(d);
   if (tiers.length) {
     ensure(40);
