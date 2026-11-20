@@ -248,7 +248,9 @@ async function aiTidy(key, manual = false) {
       });
       st.done = Math.min(todo.length, i + chunk.length);
       saveStore();
-      aiRefreshStrip();
+      // show each batch as it lands, unless the user is typing somewhere (a re-render would take their input)
+      const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes((document.activeElement || {}).tagName);
+      if (i + AI_BATCH < todo.length && !typing) rerender(); else aiRefreshStrip();
     }
     st.status = 'done';
   } catch (e) {

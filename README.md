@@ -100,7 +100,7 @@ The JD analysis is also the first section of the PDF.
 
 With a Groq API key in `.env` (`GROQ_API_KEY=...`, then restart), signed-in users can turn on **AI assist**. The work is done by `openai/gpt-oss-120b` (set `PREPIFY_AI_MODEL` to change it). It stays off until the user reads what it sends and turns it on, and it can be turned off any time in the side panel.
 
-- **Tidy pulled questions:** fixes messy scraped text, hides things that aren't questions, merges the same question asked in different words across sources, and tags each question by subject, round and difficulty. This runs automatically for new questions while AI assist is on, and **Show as pulled** brings back the original text.
+- **Tidy pulled questions** (on the faster `openai/gpt-oss-20b`, `PREPIFY_AI_FAST_MODEL`, about 100 questions in under 10 seconds): fixes messy scraped text, hides things that aren't questions, merges the same question asked in different words across sources, and tags each question by subject, round and difficulty. This runs automatically for new questions while AI assist is on, and **Show as pulled** brings back the original text.
 - **Read any job description:** a deeper reading of pasted or uploaded JDs. It fills the same tabs as the standard reading and adds a *Worth checking* list (bond, shifts, missing salary and so on). Anything the AI leaves empty, and the round predictions when the JD states no process, come from the standard reading. If the AI is unavailable, the standard reading is used. Scanned PDFs and photos still need pasting, because there is no vision model on this provider.
 - **Understand any search:** when the standard parser can't find the company or has to guess, the AI reads the search (typos, descriptions, unusual wording).
 
