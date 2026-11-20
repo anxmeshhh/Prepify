@@ -677,6 +677,16 @@ function go(q, push = true, src = null, tab = null) {
   return runSearch(q, src);
 }
 
+// Links inside Prepify are real links (Ctrl/middle-click opens a new tab); a plain click stays in the page.
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a[data-nav]');
+  if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  const u = new URL(a.href, location.origin);
+  go(u.searchParams.get('q') || '', true, u.searchParams.get('src'), u.searchParams.get('tab'));
+  window.scrollTo(0, 0);
+});
+
 window.addEventListener('popstate', () => {
   const params = new URLSearchParams(location.search);
   const q = params.get('q');
@@ -708,6 +718,7 @@ async function runSearch(q, src) {
   $('#home').classList.add('hidden');
   $('#results').classList.remove('hidden');
   $('#top-q').value = q;
+  if ($('#results-title')) $('#results-title').textContent = 'Results for ' + q;
   document.title = q + ' - Prepify';
   try {
     if (!lastParsed || lastParsed.query !== q) {
@@ -765,8 +776,8 @@ function understoodLine(p) {
     ${p.company_source === 'guess' ? `<span class="u-note">Prepify took “${esc(p.company)}” to be the company. If that's wrong, click Edit.</span>` : ''}
     ${p.company_source === 'ai' ? `<span class="u-note">Read with AI assist. If anything's wrong, click Edit.</span>` : ''}
     <form class="u-edit hidden" id="u-form">
-      <label>Company<input id="u-company" value="${esc(p.company || '')}" /></label>
-      <label>Role<input id="u-role" value="${esc(p.role || '')}" placeholder="Any" /></label>
+      <label>Company<input id="u-company" name="company" autocomplete="organization" spellcheck="false" value="${esc(p.company || '')}" /></label>
+      <label>Role<input id="u-role" name="role" autocomplete="organization-title" value="${esc(p.role || '')}" placeholder="Any role…" /></label>
       <button class="btn small primary" type="submit">Apply</button>
       <button class="linkbtn" type="button" id="u-cancel">Cancel</button>
     </form>`;
@@ -794,24 +805,18 @@ function renderGuest(d) {
   const name = companyName(d);
   const links = [...Object.entries(SITES).filter(([, x]) => x.url(name)), ['Google', GOOGLE]];
   $('#report').innerHTML = `
-    <div class="notice guest">
-      <b>You're browsing as a guest.</b> Guests get links to the sources only. Sign in with Google to pull
-      interview experiences, questions and answers from Glassdoor and AmbitionBox straight into Prepify.
-      Pulled data stays in your browser tab and is never stored on a server.
-      <div><button class="btn primary" data-signin>Sign in with Google</button></div>
+    <div class="notice guest compact">
+      <p><b>Guest mode shows links only.</b> Sign in with Google to pull experiences, questions and answers
+        into Prepify. Pulled data stays in this tab; nothing is stored on a server.</p>
+      <button class="btn primary small" data-signin>Sign in with Google</button>
     </div>
     ${jdBanner(d)}
-    <div class="sources-head"><span>Sources for <b>${esc(name)}</b></span><span class="hint">Opens the site in a new tab</span></div>
-    <div class="source-grid">${links.map(([label, s]) => `
-      <a class="source-card link-card" href="${s.url(name)}" target="_blank" rel="noopener noreferrer">
-        <div class="sc-head">
-          <span class="mark" style="--c:${s.color}">${esc(s.mark)}</span>
-          <span class="sc-name">${esc(label)}</span>
-          <span class="sc-arrow">↗</span>
-        </div>
-        <div class="sc-host">${esc(s.host)}</div>
-        <div class="sc-stats muted">${label === 'Google' ? 'Web results for interview experiences' : `${esc(name)} on ${esc(label)}`}</div>
-        <div class="sc-foot">Open in a new tab</div>
+    <div class="sources-head"><span>Sources for <b>${esc(name)}</b></span><span class="hint">Each opens in a new tab</span></div>
+    <div class="link-grid">${links.map(([label, s]) => `
+      <a class="link-row" href="${s.url(name)}" target="_blank" rel="noopener noreferrer" aria-label="${esc(label)}: ${esc(name)} (opens in a new tab)">
+        <span class="mark" style="--c:${s.color}">${esc(s.mark)}</span>
+        <span class="lr-text"><b>${esc(label)}</b><span>${esc(label === 'Google' ? 'Web results' : s.host)}</span></span>
+        <span class="lr-arrow" aria-hidden="true">↗</span>
       </a>`).join('')}
     </div>`;
   $$('#report [data-signin]').forEach(b => b.onclick = openSignin);
@@ -908,8 +913,11 @@ function sourceCard(g, company) {
     ? `<div class="sc-detail" title="${esc(pull.detail)}">Stopped at: ${esc(pull.detail)}</div>` : '';
   const firstQ = g.questions[0] || (g.experiences[0] && (g.experiences[0].questions || [])[0]);
   const preview = firstQ ? `<div class="sc-preview">“${esc(firstQ.text)}”</div>` : '';
+  const open = has && !busy;           // a pulled source is a link to its own page
+  const tag = open ? 'a' : 'button';
+  const attrs = open ? `href="${urlFor(lastData.query, g.name)}" data-nav` : `type="button" data-src="${esc(g.name)}"`;
   return `
-    <button class="source-card ${has ? '' : 'empty-card'} ${busy ? 'busy' : ''}" data-src="${esc(g.name)}" type="button">
+    <${tag} class="source-card ${has ? '' : 'empty-card'} ${busy ? 'busy' : ''}" ${attrs}>
       <div class="sc-head">
         <span class="mark" style="--c:${s.color}">${esc(s.mark)}</span>
         <span class="sc-name">${esc(g.name)}</span>
@@ -923,7 +931,7 @@ function sourceCard(g, company) {
         </div>
         <div class="sc-preview">${esc(((g.official[0].sections || [])[0] || {}).heading || g.official[0].title || '')}</div>
         ${statusLine}
-        <div class="sc-foot">Pulled ${fmtDate(g.newest)} · ground truth</div>`
+        <div class="sc-foot">Pulled ${fmtDate(g.newest)} · official</div>`
       : has ? `
         <div class="sc-stats">
           <span><b>${g.experiences.length}</b> ${g.experiences.length === 1 ? 'experience' : 'experiences'}</span>
@@ -938,22 +946,27 @@ function sourceCard(g, company) {
         <div class="sc-stats muted">Nothing pulled yet</div>
         ${statusLine}${detailLine}
         <div class="sc-foot">${SITES[g.name] && !statusLine ? `Click to pull from ${esc(g.name)}` : ''}</div>`}
-    </button>`;
+    </${tag}>`;
 }
 
-// Sites Prepify only links to (never reads automatically).
-function linkCards(name) {
-  return Object.entries(SITES).filter(([, s]) => s.linkOnly).map(([label, s]) => `
-    <a class="source-card link-card" href="${s.url(name)}" target="_blank" rel="noopener noreferrer">
-      <div class="sc-head">
-        <span class="mark" style="--c:${s.color}">${esc(s.mark)}</span>
-        <span class="sc-name">${esc(label)}</span>
-        <span class="sc-arrow">↗</span>
-      </div>
-      <div class="sc-host">${esc(s.host)}</div>
-      <div class="sc-stats muted">Links only. ${esc(label)} doesn't allow automated reading.</div>
-      <div class="sc-foot">Open posts about ${esc(name)} in a new tab</div>
-    </a>`).join('');
+// Pulled sources (and ones being pulled) as boxes; the rest as one compact row to pull from.
+function sourcesHtml(groups, name) {
+  const boxed = (g) => hasData(g) || pulls[pullKey(name, g.name)];
+  const cards = groups.filter(boxed);
+  const rest = groups.filter(g => !boxed(g));
+  const linkOnly = Object.entries(SITES).filter(([, s]) => s.linkOnly);
+  const chip = (g) => { const s = siteInfo(g.name); return `
+    <button class="src-chip" type="button" data-src="${esc(g.name)}" title="Pull ${esc(g.name)} into Prepify">
+      <span class="mark tiny" style="--c:${s.color}">${esc(s.mark)}</span>${esc(g.name)}<span class="plus" aria-hidden="true">+</span>
+    </button>`; };
+  return `${cards.length ? `<div class="source-grid">${cards.map(g => sourceCard(g, name)).join('')}</div>` : ''}
+    <div class="source-more">
+      ${rest.length ? `<span class="source-more-label">${cards.length ? 'Not pulled yet' : 'Pull one source'}</span>${rest.map(chip).join('')}` : ''}
+      ${linkOnly.map(([label, s]) => `
+        <a class="src-chip link" href="${s.url(name)}" target="_blank" rel="noopener noreferrer" title="${esc(label)} allows links only; opens in a new tab">
+          <span class="mark tiny" style="--c:${s.color}">${esc(s.mark)}</span>${esc(label)}<span class="plus" aria-hidden="true">↗</span>
+        </a>`).join('')}
+    </div>`;
 }
 
 // ---------- results dashboard + one full page per source ----------
@@ -991,7 +1004,7 @@ function renderDashboard(d, groups) {
       <span>Results from <b>${withData.length}</b> of ${groups.length} sources <span class="hint">· Click a box to open its page</span></span>
       ${anything ? '<button class="btn small" data-pdf="">Download PDF</button>' : ''}
     </div>
-    <div class="source-grid">${groups.map(g => sourceCard(g, name)).join('')}${linkCards(name)}</div>`;
+    <div id="sources">${sourcesHtml(groups, name)}</div>`;
 
   if (!anything) {
     html += `<div class="empty" style="margin-top:24px;">
@@ -1005,7 +1018,6 @@ function renderDashboard(d, groups) {
   } else {
     html += glance(d, withData);
     $('#report').innerHTML = html;
-    $$('#report [data-open-src]').forEach(b => b.onclick = () => openSource(b.dataset.openSrc));
     wireBrief(d);
   }
   wireCards(name);
@@ -1058,14 +1070,14 @@ function glance(d, withData) {
       <h2>At a glance</h2>
       <div class="glance-grid">
         ${withData.map(g => `
-          <button class="glance-card" data-open-src="${esc(g.name)}">
+          <a class="glance-card" href="${urlFor(d.query, g.name)}" data-nav>
             <span class="mark" style="--c:${siteInfo(g.name).color}">${esc(siteInfo(g.name).mark)}</span>
             <span class="glance-name">${esc(g.name)}</span>
             <span class="glance-nums">${g.official.length
               ? `${plural(g.official.length, 'official page')} · ${plural(g.official.reduce((n, pg) => n + (pg.sections || []).length, 0), 'section')}`
               : `${plural(g.experiences.length, 'experience')} · ${plural(g.questions.length, 'question')}${g.reviews.length ? ' · ' + plural(g.reviews.length, 'review') : ''}`}</span>
             <span class="glance-open">Open page →</span>
-          </button>`).join('')}
+          </a>`).join('')}
       </div>
     </section>`;
   if (Object.keys(subjects).length) {
@@ -1092,31 +1104,26 @@ function openSource(src, tab = null) {
 }
 
 function wireCards(name) {
-  $$('.source-card[data-src]').forEach(card => card.onclick = () => {
+  $$('#sources button[data-src]').forEach(card => card.onclick = () => {
     const src = card.dataset.src;
     if (card.classList.contains('busy')) return;
     const pull = pulls[pullKey(name, src)];
-    const failed = pull && pull.status !== 'working' && pull.status !== 'done';
     if (pull && (pull.status === 'login' || pull.status === 'blocked')) {
       showLoginPrompt(src, name, pull.status);
       return;
     }
     if (pull && pull.status === 'needs-url') { askOfficialLink(name); return; }
-    if (card.classList.contains('empty-card') || failed) {
-      if (SITES[src]) pullSources(name, [src]);
-      return;
-    }
-    openSource(src);
+    if (SITES[src]) pullSources(name, [src]);
   });
 }
 
 // re-render just the boxes (keeps scroll position)
 function refreshBoxes() {
   if (!lastData || !signedIn()) return;
-  const grid = $('#report .source-grid');
-  if (!grid) return;
+  const box = $('#sources');
+  if (!box) return;
   const name = companyName(lastData);
-  grid.innerHTML = groupBySource(lastData).map(g => sourceCard(g, name)).join('') + linkCards(name);
+  box.innerHTML = sourcesHtml(groupBySource(lastData), name);
   wireCards(name);
 }
 
@@ -1140,14 +1147,14 @@ function renderSourcePage(d, g, groups) {
 
   $('#report').innerHTML = `
     <nav class="crumbs" aria-label="Breadcrumb">
-      <button class="btn small" data-back>← Back to results</button>
-      <span class="crumb-path"><button class="linkbtn" data-back>${esc(name)}</button><span>›</span><b>${esc(g.name)}</b></span>
-      <div class="switcher" role="tablist" aria-label="Sources">
+      <a class="btn small" href="${urlFor(d.query)}" data-nav>← Back to results</a>
+      <span class="crumb-path"><a class="linkbtn" href="${urlFor(d.query)}" data-nav>${esc(name)}</a><span aria-hidden="true">›</span><b aria-current="page">${esc(g.name)}</b></span>
+      <nav class="switcher" aria-label="Sources">
         ${groups.filter(hasData).map(o => `
-          <button class="switch ${o.name === g.name ? 'active' : ''}" data-switch="${esc(o.name)}" ${o.name === g.name ? 'aria-current="page"' : ''}>
+          <a class="switch ${o.name === g.name ? 'active' : ''}" href="${urlFor(d.query, o.name)}" data-nav ${o.name === g.name ? 'aria-current="page"' : ''}>
             <span class="mark tiny" style="--c:${siteInfo(o.name).color}">${esc(siteInfo(o.name).mark)}</span>${esc(o.name)}
-          </button>`).join('')}
-      </div>
+          </a>`).join('')}
+      </nav>
     </nav>
 
     <header class="source-hero">
@@ -1171,7 +1178,7 @@ function renderSourcePage(d, g, groups) {
     <div id="tab-body" role="tabpanel"></div>
 
     <div class="page-foot">
-      <button class="btn" data-back>← Back to results</button>
+      <a class="btn" href="${urlFor(d.query)}" data-nav>← Back to results</a>
       <button class="linkbtn" id="to-top">Back to top ↑</button>
     </div>`;
 
@@ -1182,8 +1189,7 @@ function renderSourcePage(d, g, groups) {
     wireTab(k, name);
   };
   $$('.tabs .tab').forEach(t => t.onclick = () => showTab(t.dataset.tab));
-  $$('[data-back]').forEach(b => b.onclick = () => { go(d.query, true); window.scrollTo(0, 0); });
-  $$('[data-switch]').forEach(b => b.onclick = () => openSource(b.dataset.switch));
+
   $('#to-top').onclick = () => window.scrollTo({ top: 0, behavior: 'smooth' });
   const rb = $('#refresh-src');
   if (rb) rb.onclick = () => { pullSources(name, [rb.dataset.src]); rb.textContent = 'Pulling…'; rb.disabled = true; };
@@ -1639,7 +1645,6 @@ $('#top-form').onsubmit = (e) => { e.preventDefault(); go($('#top-q').value); };
 $('#logo-home').onclick = (e) => { e.preventDefault(); history.pushState({}, '', '/'); showHome(); };
 $$('.example').forEach(c => c.onclick = () => { $('#home-q').value = c.textContent; go(c.textContent); });
 
-$('#home-research-pill').onclick = () => $('#home-research').click();
 $('#home-research').onclick = async () => {
   const q = $('#home-q').value.trim();
   if (!q) { $('#home-q').focus(); return; }

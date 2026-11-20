@@ -21,7 +21,7 @@ function aiEntry() {
 
 // The button for an AI action: runs it when AI assist is on, otherwise offers to turn AI assist on.
 function aiActionButton(attr, label, cost, cls = 'btn small') {
-  if (!signedIn() || !aiAvailable()) return '';
+  if (!signedIn() || !aiAvailable() || aiPref() === 'off') return '';     // turned off on purpose: no offers
   if (!aiOn()) return `<button class="${cls}" type="button" data-ai-turn-on>Turn on AI assist to ${label.charAt(0).toLowerCase() + label.slice(1)}</button>`;
   const left = auth.ai && auth.ai.tokens && auth.ai.tokens.user_left;
   const short = left !== undefined && left !== null && left < cost * 1.5;
@@ -81,6 +81,7 @@ function briefCounts(d) {
 function briefHtml(d) {
   const c = aiEntry();
   if (!c || !signedIn() || !aiAvailable()) return '';
+  if (aiPref() === 'off' && !(c.ai && c.ai.brief)) return '';
   const counts = briefCounts(d);
   if (!counts.x && !counts.q) return '';
   const name = companyName(d);
@@ -250,6 +251,7 @@ const resumeHash = (jd) => strHash((jd.resumeText || '') + '|' + (jd.analysis.ti
 function resumeCoachHtml() {
   const jd = jdNow();
   if (!jd || !signedIn() || !aiAvailable()) return '';
+  if (aiPref() === 'off' && !jd.aiResume) return '';
   const r = jd.aiResume;
   if (!jd.resumeText) {
     return `<section class="section coach"><h2>Deeper match with AI</h2>
@@ -406,8 +408,8 @@ function scheduleHtml(d) {
     <p class="sub">A day-by-day plan from the topics below, most important first, with a mock interview two days before and light revision the day before.
       Unfinished topics move forward each day. Made in your browser, no AI.</p>
     <form class="sched-form" id="sched-form">
-      <label>Interview date<input type="date" id="sched-date" min="${minDate}" value="${esc(s.date || '')}" required /></label>
-      <label>Hours a day<select id="sched-hours">${[1, 2, 3, 4, 5, 6].map(h => `<option ${+(s.hours || 2) === h ? 'selected' : ''}>${h}</option>`).join('')}</select></label>
+      <label>Interview date<input type="date" id="sched-date" name="interview-date" autocomplete="off" min="${minDate}" value="${esc(s.date || '')}" required /></label>
+      <label>Hours a day<select id="sched-hours" name="hours">${[1, 2, 3, 4, 5, 6].map(h => `<option ${+(s.hours || 2) === h ? 'selected' : ''}>${h}</option>`).join('')}</select></label>
       <button class="btn small primary" type="submit">${sch ? 'Update schedule' : 'Make schedule'}</button>
       ${sch ? '<button class="linkbtn" type="button" data-sched-clear>Remove</button>' : ''}
     </form>

@@ -116,7 +116,7 @@ function openJdModal(step = 'input') {
         <div class="field-head"><label for="jd-text">Job description</label>
           <label class="file-btn"><input type="file" id="jd-file" accept="${aiFiles() ? JD_ACCEPT_AI : JD_ACCEPT}" /><span id="jd-file-label">${aiFiles() ? 'Upload PDF, DOCX, TXT or image' : 'Upload PDF, DOCX or TXT'}</span></label></div>
         <div class="file-name hidden" id="jd-file-name"></div>
-        <textarea id="jd-text" rows="9" placeholder="Paste the job description here, or upload the file"></textarea>
+        <textarea id="jd-text" name="jd" rows="9" autocomplete="off" placeholder="Paste the job description here, or upload the file…"></textarea>
       </div>
 
       <details class="field resume-opt" ${jd && jd.resumeText ? 'open' : ''}>
@@ -124,7 +124,7 @@ function openJdModal(step = 'input') {
         <div class="field-head"><label for="resume-text">Resume</label>
           <label class="file-btn"><input type="file" id="resume-file" accept="${JD_ACCEPT}" />Upload resume</label></div>
         <div class="file-name hidden" id="resume-file-name"></div>
-        <textarea id="resume-text" rows="5" placeholder="Paste your resume text here, or upload the file">${esc((jd && jd.resumeText) || '')}</textarea>
+        <textarea id="resume-text" name="resume" rows="5" autocomplete="off" placeholder="Paste your resume text here, or upload the file…">${esc((jd && jd.resumeText) || '')}</textarea>
         <p class="note">Used only to show which JD skills your resume covers. Kept in this tab, like everything else.</p>
       </details>
       ${aiJdNoteHtml()}
@@ -207,8 +207,8 @@ function renderJdConfirm(el) {
         <b>${plural(a.rounds.length, 'likely round')}</b>${a.resume ? `, and your resume covers <b>${a.resume.score ?? 0}%</b> of the required skills` : ''}.
         Check the company and role so Prepify can pull the right interviews.</p>
       <div class="field two">
-        <label>Company<input id="jd-company" value="${esc(a.company || '')}" placeholder="Company name" required /></label>
-        <label>Role<input id="jd-role" value="${esc(a.title || '')}" placeholder="Role" /></label>
+        <label>Company<input id="jd-company" name="company" autocomplete="organization" spellcheck="false" value="${esc(a.company || '')}" placeholder="For example Razorpay…" required /></label>
+        <label>Role<input id="jd-role" name="role" autocomplete="organization-title" value="${esc(a.title || '')}" placeholder="For example Software Engineer II…" /></label>
       </div>
       ${a.company_source === 'mentioned' ? '<p class="note">The company was guessed from names mentioned in the JD. Please check it.</p>' : ''}
       ${a.ai ? `<p class="note">Read with AI assist (${esc(a.ai.model_name || a.ai.model)}).</p>` : ''}
@@ -272,8 +272,8 @@ function renderJdPage(d) {
 
   $('#report').innerHTML = `
     <nav class="crumbs" aria-label="Breadcrumb">
-      <button class="btn small" data-back>← Back to results</button>
-      <span class="crumb-path"><button class="linkbtn" data-back>${esc(companyName(d) || name)}</button><span>›</span><b>Job description</b></span>
+      <a class="btn small" href="${urlFor(d.query)}" data-nav>← Back to results</a>
+      <span class="crumb-path"><a class="linkbtn" href="${urlFor(d.query)}" data-nav>${esc(companyName(d) || name)}</a><span aria-hidden="true">›</span><b aria-current="page">Job description</b></span>
     </nav>
 
     <header class="source-hero">
@@ -297,7 +297,7 @@ function renderJdPage(d) {
     <div id="tab-body" role="tabpanel"></div>
 
     <div class="page-foot">
-      <button class="btn" data-back>← Back to results</button>
+      <a class="btn" href="${urlFor(d.query)}" data-nav>← Back to results</a>
       <button class="linkbtn" id="to-top">Back to top ↑</button>
     </div>`;
 
@@ -308,7 +308,6 @@ function renderJdPage(d) {
     wireJdTab(k, d);
   };
   $$('.tabs .tab').forEach(t => t.onclick = () => showTab(t.dataset.tab));
-  $$('[data-back]').forEach(b => b.onclick = () => { go(d.query, true); window.scrollTo(0, 0); });
   $('#to-top').onclick = () => window.scrollTo({ top: 0, behavior: 'smooth' });
   $('[data-jd-replace]').onclick = () => openJdModal('input');
   const js = $('[data-jd-search]');
@@ -589,7 +588,7 @@ function jdBanner(d) {
   const qs = pulledQuestions(d);
   const matched = qs.filter(q => jdSkillsIn(q.text).length).length;
   const prog = planProgress(d);
-  return `<button class="jd-banner" data-jd-open type="button">
+  return `<a class="jd-banner" href="${urlFor(d.query, 'JD')}" data-nav>
       <span class="mark" style="--c:var(--purple)">JD</span>
       <span class="jd-banner-text">
         <b>${esc(jd.role || a.title || 'Job description')}${jd.company ? ` · ${esc(jd.company)}` : ''}</b>
@@ -597,7 +596,7 @@ function jdBanner(d) {
           ${qs.length ? ` · ${matched} of ${plural(qs.length, 'pulled question')} match` : ''}${prog.total ? ` · plan ${prog.done}/${prog.total}` : ''}${a.resume ? ` · resume ${a.resume.score ?? 0}%` : ''}</span>
       </span>
       <span class="glance-open">Open analysis →</span>
-    </button>`;
+    </a>`;
 }
 
 function wireJdBanner(d) {

@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#0a0a0a" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Prepify</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -15,19 +16,16 @@
   <main id="home" class="home">
     <nav class="corner"><div class="auth" data-auth></div></nav>
     <div class="home-inner">
-      <div class="wordmark"><span class="dim">Prep</span>ify</div>
+      <h1 class="wordmark"><span class="dim">Prep</span>ify</h1>
       <p class="tagline">Interview experiences, questions and answers for any company, with a source on every item</p>
 
       <form id="home-form" class="searchbar big" autocomplete="off">
         <span class="prompt" aria-hidden="true">&gt;</span>
-        <input id="home-q" name="q" aria-label="Search" placeholder="Target Corporation interview questions" autofocus />
-        <button type="button" class="pill" id="home-research-pill" title="Search and pull Glassdoor and AmbitionBox into Prepify">
-          <span class="key">/</span>Research
-        </button>
+        <input id="home-q" name="q" type="search" aria-label="Search" placeholder="Search a company, role or round…" autofocus spellcheck="false" />
       </form>
 
       <div class="home-actions">
-        <button type="submit" form="home-form" class="btn">Search</button>
+        <button type="submit" form="home-form" class="btn primary">Search</button>
         <button type="button" id="home-research" class="btn">Research sources</button>
         <button type="button" id="home-jd" class="btn">Add job description</button>
       </div>
@@ -45,21 +43,23 @@
   <!-- ===== Results ===== -->
   <div id="results" class="results hidden">
     <header class="topbar">
+      <a class="skip-link" href="#report">Skip to results</a>
       <div class="topbar-inner">
         <a href="/" class="wordmark small" id="logo-home"><span class="dim">Prep</span>ify</a>
         <form id="top-form" class="searchbar" autocomplete="off">
           <span class="prompt" aria-hidden="true">&gt;</span>
-          <input id="top-q" name="q" aria-label="Search" />
+          <input id="top-q" name="q" type="search" aria-label="Search" spellcheck="false" />
         </form>
         <div class="auth" data-auth></div>
       </div>
     </header>
 
     <div class="layout">
-      <div class="main-col">
+      <main class="main-col">
+        <h1 class="visually-hidden" id="results-title">Search results</h1>
         <p class="understood" id="understood"></p>
-        <div id="report"></div>
-      </div>
+        <div id="report" tabindex="-1"></div>
+      </main>
       <aside class="side-col" id="panel"></aside>
     </div>
   </div>
