@@ -41,7 +41,7 @@ function pulledQuestions(d) {
   const seen = new Map();
   const add = (q, source, url) => {
     if (!q || !q.text) return;
-    const k = norm(q.text);
+    const k = qKey(q);
     const have = seen.get(k);
     if (have) { have.sources.add(source); return; }
     seen.set(k, { text: q.text, answers: q.answers || [], sources: new Set([source]), url });
@@ -114,7 +114,7 @@ function openJdModal(step = 'input') {
 
       <div class="field">
         <div class="field-head"><label for="jd-text">Job description</label>
-          <label class="file-btn"><input type="file" id="jd-file" accept="${JD_ACCEPT}" />Upload PDF, DOCX or TXT</label></div>
+          <label class="file-btn"><input type="file" id="jd-file" accept="${aiReady() ? JD_ACCEPT_AI : JD_ACCEPT}" /><span id="jd-file-label">${aiReady() ? 'Upload PDF, DOCX, TXT or image' : 'Upload PDF, DOCX or TXT'}</span></label></div>
         <div class="file-name hidden" id="jd-file-name"></div>
         <textarea id="jd-text" rows="9" placeholder="Paste the job description here, or upload the file"></textarea>
       </div>
@@ -127,6 +127,7 @@ function openJdModal(step = 'input') {
         <textarea id="resume-text" rows="5" placeholder="Paste your resume text here, or upload the file">${esc((jd && jd.resumeText) || '')}</textarea>
         <p class="note">Used only to show which JD skills your resume covers. Kept in this tab, like everything else.</p>
       </details>
+      ${aiJdNoteHtml()}
 
       <div class="form-error hidden" id="jd-error" role="alert"></div>
       <div class="login-actions">
@@ -142,6 +143,7 @@ function openJdModal(step = 'input') {
   showName($('#jd-file'), $('#jd-file-name'));
   showName($('#resume-file'), $('#resume-file-name'));
   el.querySelector('[data-jd-close]').onclick = closeJdModal;
+  wireAiJdNote();
   $('#jd-form').onsubmit = (e) => { e.preventDefault(); submitJd(); };
   setTimeout(() => $('#jd-text').focus(), 0);
 }
@@ -166,16 +168,20 @@ async function submitJd() {
   const rFile = $('#resume-file').files[0];
   const rText = $('#resume-text').value.trim();
   if (rFile) fd.append('resume_file', rFile); else if (rText) fd.append('resume_text', rText);
+  const withAi = aiReady();
+  if (withAi) fd.append('use_ai', '1');
   err.classList.add('hidden');
   btn.disabled = true;
-  btn.textContent = 'Analysing…';
+  btn.textContent = withAi ? 'Reading with AI…' : 'Analysing…';
   try {
     const res = await fetch('/api/jd', { method: 'POST', body: fd });
     const body = await res.json().catch(() => ({}));
+    aiNoteStatus(body.ai);
     if (!res.ok) throw new Error(body.error || `The server said ${res.status}`);
+    if (body.ai_error) toast(`AI assist couldn't read the JD, so Prepify used the standard reading. ${body.ai_error}`);
     store.jd = {
       analysis: body.analysis,
-      text: jdFile ? null : jdText,
+      text: jdFile ? (body.text || null) : jdText,
       resumeText: rFile ? null : (rText || null),
       created_at: new Date().toISOString(),
       done: {}
@@ -204,6 +210,7 @@ function renderJdConfirm(el) {
         <label>Role<input id="jd-role" value="${esc(a.title || '')}" placeholder="Role" /></label>
       </div>
       ${a.company_source === 'mentioned' ? '<p class="note">The company was guessed from names mentioned in the JD. Please check it.</p>' : ''}
+      ${a.ai ? `<p class="note">Read with AI assist${a.ai.from_file ? ', straight from the file' : ''}.</p>` : ''}
       <div class="form-error hidden" id="jd-error" role="alert"></div>
       <div class="login-actions">
         <button class="btn primary" type="submit">Show the analysis</button>
@@ -273,7 +280,7 @@ function renderJdPage(d) {
       <div class="hero-text">
         <h1>${esc(jd.role || a.title || 'Job description')} <span class="dim">· ${esc(name)}</span></h1>
         <div class="sub">${[a.seniority, a.experience && a.experience.label, a.facts.work_mode, (a.facts.locations || []).join(', ')]
-          .filter(Boolean).map(esc).join(' · ') || 'Analysed job description'} · added ${fmtDate(jd.created_at)}</div>
+          .filter(Boolean).map(esc).join(' · ') || 'Analysed job description'} · added ${fmtDate(jd.created_at)}${a.ai ? ' · read with AI' : ''}</div>
       </div>
       <div class="head-actions">
         <button class="btn primary" data-pdf="JD">Download PDF</button>
@@ -342,6 +349,8 @@ function jdTabBody(k, d, ctx) {
           <ol class="jd-steps">${a.rounds.map(r => `<li>${esc(r.name)}</li>`).join('')}</ol>
         </section>
       </div>
+      ${(a.watch_outs || []).length ? `<section class="section"><h2>Worth checking</h2>
+        <p class="sub">Points in this JD to clarify before you accept an offer.</p>${jdList(a.watch_outs, 'watch')}</section>` : ''}
       ${a.process && a.process.length ? `<section class="section"><h2>Hiring process stated in the JD</h2>${jdList(a.process)}</section>` : ''}
       ${a.responsibilities.length ? `<section class="section"><h2>What you'll do</h2>${jdList(a.responsibilities)}</section>` : ''}
       ${a.requirements.length ? `<section class="section"><h2>What they ask for</h2>${jdList(a.requirements)}</section>` : ''}
@@ -629,6 +638,12 @@ function writeJdPdf(api, d) {
     .filter(([, v]) => v);
   facts.forEach(([k, v]) => write(`${k}: ${v}`, { size: 9, color: muted, indent: 6, after: 1 }));
   ensure(30); write('', { after: 4 });
+
+  if ((a.watch_outs || []).length) {
+    write('Worth checking', { size: 13, bold: true, after: 4 });
+    a.watch_outs.forEach(w => write('- ' + w, { indent: 6, after: 2 }));
+    write('', { after: 2 });
+  }
 
   write('Skills', { size: 13, bold: true, after: 4 });
   ['required', 'expected', 'preferred'].forEach(l => {

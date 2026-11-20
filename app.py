@@ -12,14 +12,15 @@ import secrets
 
 from flask import Flask, jsonify, render_template, request, session
 
-import jd as jd_reader
-from query_parser import parse_query
-
-try:  # settings from .env (GOOGLE_CLIENT_ID, PREPIFY_SECRET); real environment variables win
+try:  # settings from .env (GOOGLE_CLIENT_ID, PREPIFY_SECRET, ANTHROPIC_API_KEY); real environment variables win
     from dotenv import load_dotenv
     load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
 except ImportError:
     pass
+
+import ai  # noqa: E402  (reads its settings from the environment loaded above)
+import jd as jd_reader  # noqa: E402
+from query_parser import parse_query  # noqa: E402
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 
@@ -48,17 +49,120 @@ def parse():
 @app.route('/api/jd', methods=['POST'])
 def analyse_jd():
     """Analyse a job description (file or pasted text) and, optionally, a resume.
-    Nothing is kept: the text is read, analysed and the result is returned."""
-    def read(field):
-        f = request.files.get(field + '_file')
-        if f and f.filename:
-            return jd_reader.text_from_upload(f.filename, f.read(jd_reader.MAX_BYTES + 1))
-        return request.form.get(field + '_text', '')
+    With use_ai=1 (signed in, AI set up) the AI reads it, including scanned PDFs and photos; the rules are the
+    fallback. Nothing is kept: the text is read, analysed and the result is returned."""
+    user = current_user()
+    use_ai = request.form.get('use_ai') == '1' and bool(user) and ai.available()
+    jd_file = request.files.get('jd_file')
+    text = file_data = media_type = None
     try:
-        result = jd_reader.analyze(read('jd'), read('resume'))
+        if jd_file and jd_file.filename:
+            raw = jd_file.read(jd_reader.MAX_BYTES + 1)
+            try:
+                text = jd_reader.text_from_upload(jd_file.filename, raw)
+            except jd_reader.NeedsAI as e:
+                if not use_ai:
+                    raise jd_reader.JDError(str(e) if ai.available() and user else
+                                            'That file has no text Prepify can read (it may be a scanned image or a '
+                                            'photo). Paste the text instead.')
+                file_data, media_type = e.data, e.media_type
+        else:
+            text = request.form.get('jd_text', '')
+        resume_text = ''
+        rf = request.files.get('resume_file')
+        if rf and rf.filename:
+            try:
+                resume_text = jd_reader.text_from_upload(rf.filename, rf.read(jd_reader.MAX_BYTES + 1))
+            except jd_reader.NeedsAI:
+                raise jd_reader.JDError("That resume file has no text Prepify can read. Paste your resume's text instead.")
+        else:
+            resume_text = request.form.get('resume_text', '')
     except jd_reader.JDError as e:
         return jsonify({'error': str(e)}), 400
-    return jsonify({'analysis': result})
+
+    ai_note = None
+    if use_ai:
+        try:
+            ai.charge(user['email'])
+            try:
+                analysis, jd_text = ai.read_jd(text, file_data, media_type, resume_text)
+            except Exception:
+                ai.refund(user['email'])
+                raise
+            return jsonify({'analysis': analysis, 'text': jd_text if jd_file else None, 'ai': ai.status(user)})
+        except jd_reader.JDError as e:
+            return jsonify({'error': str(e)}), 400
+        except Exception as e:                       # AI failed: the rules still read text JDs
+            if not isinstance(e, ai.AIError):
+                app.logger.exception('AI JD reading failed')
+            ai_note = str(e) if isinstance(e, ai.AIError) else 'AI assist failed unexpectedly.'
+            if file_data is not None:
+                return jsonify({'error': f'{ai_note} Paste the JD text instead.', 'ai': ai.status(user)}), 502
+    try:
+        result = jd_reader.analyze(text, resume_text)
+    except jd_reader.JDError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'analysis': result, 'text': text if jd_file else None, 'ai_error': ai_note,
+                    'ai': ai.status(user)})
+
+
+# ---------- AI assist (ai.py): signed-in users only, with a daily limit per user ----------
+def _ai_begin():
+    """The signed-in user, after counting one AI request; or an error response."""
+    user = current_user()
+    if not user:
+        return None, (jsonify({'error': 'Sign in to use AI assist.'}), 401)
+    if not ai.available():
+        return None, (jsonify({'error': 'AI assist is not set up on this server.', 'ai': ai.status(user)}), 503)
+    try:
+        ai.charge(user['email'])
+    except ai.AILimit as e:
+        return None, (jsonify({'error': str(e), 'ai': ai.status(user)}), 429)
+    return user, None
+
+
+def _ai_failed(user, e, what):
+    ai.refund(user['email'])
+    if not isinstance(e, ai.AIError):
+        app.logger.exception('AI %s failed', what)
+    status = e.status if isinstance(e, ai.AIError) else 502
+    return jsonify({'error': str(e) if isinstance(e, ai.AIError) else f'AI {what} failed unexpectedly.',
+                    'ai': ai.status(user)}), status
+
+
+@app.route('/api/ai/questions', methods=['POST'])
+def ai_questions():
+    body = request.get_json(silent=True) or {}
+    items = body.get('items')
+    if not isinstance(items, list) or not items:
+        return jsonify({'error': 'no questions sent'}), 400
+    known = body.get('known') if isinstance(body.get('known'), list) else []
+    user, err = _ai_begin()
+    if err:
+        return err
+    try:
+        out, model = ai.tidy_questions(str(body.get('company') or ''), items, known)
+    except Exception as e:
+        return _ai_failed(user, e, 'question tidying')
+    return jsonify({**out, 'model': model, 'ai': ai.status(user)})
+
+
+@app.route('/api/ai/parse', methods=['POST'])
+def ai_parse():
+    q = str((request.get_json(silent=True) or {}).get('q') or '').strip()[:300]
+    if not q:
+        return jsonify({'error': 'empty query'}), 400
+    hit = ai.cached_parse(q)
+    if hit and current_user():
+        return jsonify({'query': q, 'parsed': hit, 'ai': ai.status(current_user())})
+    user, err = _ai_begin()
+    if err:
+        return err
+    try:
+        parsed = ai.parse_search(q)
+    except Exception as e:
+        return _ai_failed(user, e, 'search reading')
+    return jsonify({'query': q, 'parsed': parsed, 'ai': ai.status(user)})
 
 
 # ---------- Sign in with Google (optional) ----------
@@ -69,7 +173,7 @@ def current_user():
 @app.route('/api/auth/config', methods=['GET'])
 def auth_config():
     return jsonify({'google_client_id': GOOGLE_CLIENT_ID or None, 'user': current_user(),
-                    'sources': {'reddit_api': bool(REDDIT_CLIENT_ID)}})
+                    'sources': {'reddit_api': bool(REDDIT_CLIENT_ID)}, 'ai': ai.status(current_user())})
 
 
 @app.route('/api/auth/google', methods=['POST'])

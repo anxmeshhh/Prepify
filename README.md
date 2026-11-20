@@ -82,7 +82,7 @@ You can also write it explicitly: `company:"Target" role:"Data Analyst" intervie
 
 ## Job description analysis
 
-Click **Add job description** on the home page, the results page or the side panel. Paste the JD or upload it (PDF, DOCX or TXT), and optionally add your resume. Prepify analyses it on the server, sends the result back and keeps nothing; the result lives in your tab like everything else. Works in guest mode too.
+Click **Add job description** on the home page, the results page or the side panel. Paste the JD or upload it (PDF, DOCX or TXT; with AI assist also scanned PDFs and images), and optionally add your resume. Prepify analyses it on the server, sends the result back and keeps nothing; the result lives in your tab like everything else. Works in guest mode too.
 
 The JD page has these tabs:
 
@@ -95,6 +95,16 @@ The JD page has these tabs:
 - **Questions to ask:** questions for the interviewer built from the JD, plus resume keywords.
 
 The JD analysis is also the first section of the PDF.
+
+## AI assist (optional)
+
+With an Anthropic API key in `.env` (`ANTHROPIC_API_KEY=...`, then restart), signed-in users can turn on **AI assist**. It uses Claude (`claude-opus-5-5` by default; set `PREPIFY_AI_MODEL` to change it). It stays off until the user reads what it sends and turns it on, and it can be turned off any time in the side panel.
+
+- **Tidy pulled questions:** fixes messy scraped text, hides things that aren't questions, merges the same question asked in different words across sources, and tags each question by subject, round and difficulty. This runs automatically for new questions while AI assist is on, and **Show as pulled** brings back the original text.
+- **Read any job description:** any layout, including scanned PDFs and photos or screenshots of a JD. It adds a *Worth checking* list (bond, shifts, missing salary and so on). If the AI is unavailable, the standard reading is used for text JDs.
+- **Understand any search:** when the standard parser can't find the company or has to guess, the AI reads the search (typos, descriptions, unusual wording).
+
+The questions, JD, resume and searches are sent to Anthropic's API and the results come straight back; Prepify stores nothing. Each user gets `PREPIFY_AI_DAILY_LIMIT` AI requests a day (60 by default; counted in memory). If the main model declines a request, it is retried on `PREPIFY_AI_FALLBACK_MODEL` (`claude-opus-5`; leave it empty to turn this off). All AI code is in `ai.py`.
 
 ## Using results
 
@@ -109,11 +119,12 @@ The JD analysis is also the first section of the PDF.
 
 | Path | What it is |
 | --- | --- |
-| `app.py` | Flask routes: `/api/parse`, `/api/jd`, Google sign-in (`/api/auth/*`), official pages and Reddit; no database |
+| `app.py` | Flask routes: `/api/parse`, `/api/jd`, `/api/ai/*`, Google sign-in (`/api/auth/*`), official pages and Reddit; no database |
+| `ai.py` | AI assist (Claude): question tidying, JD reading and search reading, with the daily limit |
 | `query_parser.py` | Understanding search queries: company, role, level, location, rounds, topics |
 | `jd.py`, `skills.py` | Job description and resume analysis, and the skills list with revision topics and practice questions |
 | `tests/` | `python -m pytest tests` |
-| `templates/search.html`, `static/search.*`, `static/jd.js` | Search home page, results pages, JD page and in-tab session store |
+| `templates/search.html`, `static/search.*`, `static/jd.js`, `static/ai.js` | Search home page, results pages, JD page, AI assist and in-tab session store |
 | `extension/` | Prepify Capture Chrome extension (Manifest V3) |
 
 ## Data sources and terms

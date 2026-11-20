@@ -19,10 +19,38 @@ class JDError(ValueError):
     pass
 
 
+class NeedsAI(JDError):
+    """A file the rules can't read (a scanned PDF or a photo). AI assist can, from the raw bytes."""
+    def __init__(self, message, data, media_type):
+        super().__init__(message)
+        self.data = data
+        self.media_type = media_type
+
+
+IMAGE_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif'}
+
+
+def _image_type(name, data):
+    for ext, mt in IMAGE_TYPES.items():
+        if name.endswith(ext):
+            return mt
+    if data[:8] == b'\x89PNG\r\n\x1a\n':
+        return 'image/png'
+    if data[:3] == b'\xff\xd8\xff':
+        return 'image/jpeg'
+    if data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        return 'image/webp'
+    return None
+
+
 def text_from_upload(filename, data):
     name = (filename or '').lower()
     if len(data) > MAX_BYTES:
         raise JDError('That file is over 5 MB. Paste the text instead.')
+    image = _image_type(name, data)
+    if image:
+        raise NeedsAI('Photos and screenshots of a JD can only be read with AI assist. Turn it on, or paste the text.',
+                      data, image)
     if name.endswith('.pdf') or data[:5] == b'%PDF-':
         try:
             from pypdf import PdfReader
@@ -33,8 +61,9 @@ def text_from_upload(filename, data):
             text = '\n'.join((page.extract_text() or '') for page in reader.pages[:20])
         except Exception:
             raise JDError("That PDF couldn't be read. Paste the text instead.")
-        if not text.strip():
-            raise JDError('That PDF has no selectable text (it may be a scanned image). Paste the text instead.')
+        if len(text.strip()) < 80:
+            raise NeedsAI('That PDF has no selectable text (it may be a scanned image). Turn on AI assist to read it, '
+                          'or paste the text instead.', data, 'application/pdf')
         return text
     if name.endswith('.docx') or data[:2] == b'PK':
         try:
@@ -414,18 +443,7 @@ def analyze(text, resume_text=None):
         level = 'required' if name in req_counts else 'preferred' if name in pref_counts else 'mentioned'
         skills_out.append(public(s, level=level, mentions=n, evidence=evidence(name)))
     family = _role_family(title, [s['name'] for s in skills_out if s['level'] != 'mentioned'])
-    # expected fundamentals for engineering roles, even when the JD doesn't list them
-    if family in ('Software', 'Frontend', 'Mobile', 'Data engineering', 'DevOps', 'Testing'):
-        for name in ('Data structures and algorithms', 'OOP and design patterns'):
-            if name not in all_counts:
-                skills_out.append(public(skill(name), level='expected', mentions=0,
-                                         evidence='Not in the JD, but almost always tested for engineering roles.'))
-    if family in ('Data analysis', 'Data science', 'Data engineering') and 'SQL' not in all_counts:
-        skills_out.append(public(skill('SQL'), level='expected', mentions=0,
-                                 evidence='Not in the JD, but data roles almost always test SQL.'))
-    rank = {'required': 0, 'expected': 1, 'preferred': 2, 'mentioned': 3}
-    skills_out.sort(key=lambda s: (rank[s['level']], -s['mentions'],
-                                   CATEGORY_ORDER.index(s['category']) if s['category'] in CATEGORY_ORDER else 99))
+    finish_skills(skills_out, family)
 
     facts = _facts(text, lines, title)
     responsibilities = sections.get('responsibilities', [])[:12]
@@ -441,12 +459,35 @@ def analyze(text, resume_text=None):
         'process': sections.get('process', [])[:8],
         'rounds': _rounds(family, seniority, exp, tech_names, text),
         'ask': _questions_to_ask(title, family, tech_names, facts, responsibilities),
-        'keywords': _keywords({s['name']: s['mentions'] for s in skills_out if s['level'] in ('required', 'preferred')}),
+        'keywords': keywords_for(skills_out),
         'chars': len(text),
     }
     if resume_text and resume_text.strip():
         result['resume'] = compare_resume(skills_out, resume_text[:MAX_CHARS])
     return result
+
+
+LEVEL_RANK = {'required': 0, 'expected': 1, 'preferred': 2, 'mentioned': 3}
+
+
+def finish_skills(skills_out, family):
+    """Add the fundamentals a role is always tested on, then sort: required first, most mentioned first."""
+    have = {s['name'] for s in skills_out}
+    if family in ('Software', 'Frontend', 'Mobile', 'Data engineering', 'DevOps', 'Testing'):
+        for name in ('Data structures and algorithms', 'OOP and design patterns'):
+            if name not in have:
+                skills_out.append(public(skill(name), level='expected', mentions=0,
+                                         evidence='Not in the JD, but almost always tested for engineering roles.'))
+    if family in ('Data analysis', 'Data science', 'Data engineering') and 'SQL' not in have:
+        skills_out.append(public(skill('SQL'), level='expected', mentions=0,
+                                 evidence='Not in the JD, but data roles almost always test SQL.'))
+    skills_out.sort(key=lambda s: (LEVEL_RANK[s['level']], -s['mentions'],
+                                   CATEGORY_ORDER.index(s['category']) if s['category'] in CATEGORY_ORDER else 99))
+    return skills_out
+
+
+def keywords_for(skills_out):
+    return _keywords({s['name']: s['mentions'] for s in skills_out if s['level'] in ('required', 'preferred')})
 
 
 NOT_ON_RESUMES = ('Soft skills', 'Product & business', 'Practices')
@@ -456,16 +497,27 @@ def compare_resume(jd_skills, resume_text):
     have = find_skills(resume_text)
     if 'Relational databases' in have:   # MySQL / PostgreSQL on a resume means SQL
         have.setdefault('SQL', 1)
+
+    def on_resume(s):     # skills outside the lexicon (found by AI) are matched by their own pattern
+        if s['name'] in have:
+            return True
+        if skill(s['name']):
+            return False
+        try:
+            return bool(re.search(s['pattern'], resume_text, re.I))
+        except re.error:
+            return False
+
     rows = []
     for s in jd_skills:
         if s['category'] in NOT_ON_RESUMES:
             continue
-        rows.append({'name': s['name'], 'level': s['level'], 'in_resume': s['name'] in have})
+        rows.append({'name': s['name'], 'level': s['level'], 'in_resume': on_resume(s)})
     want = [r for r in rows if r['level'] in ('required', 'expected')]
     matched = [r for r in want if r['in_resume']]
     score = round(100 * len(matched) / len(want)) if want else None
     extra = [n for n in have if n not in {s['name'] for s in jd_skills}
-             and skill(n)['category'] not in NOT_ON_RESUMES][:10]
+             and skill(n) and skill(n)['category'] not in NOT_ON_RESUMES][:10]
     return {
         'score': score,
         'matched': [r['name'] for r in rows if r['in_resume']],

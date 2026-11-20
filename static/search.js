@@ -23,7 +23,12 @@ const norm = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 async function getJson(url, opts = {}) {
   const res = await fetch(url, { headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', ...opts });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    const err = new Error(body.error || `HTTP ${res.status}`);
+    err.status = res.status;
+    err.body = body;
+    throw err;
+  }
   return body;
 }
 
@@ -209,6 +214,7 @@ function saveStore() {
 }
 function clearStore() {
   store = { companies: {} };
+  ai.state = {};
   try { sessionStorage.removeItem(STORE_KEY); } catch (e) { /* ignore */ }
 }
 
@@ -283,7 +289,7 @@ function addCapture(payload, fallbackCompany) {
 }
 
 // ---------- auth (optional Google sign-in) ----------
-const auth = { clientId: null, user: null, ready: false, sources: {} };
+const auth = { clientId: null, user: null, ready: false, sources: {}, ai: null };
 const signedIn = () => !!auth.user;
 
 async function loadAuth() {
@@ -292,6 +298,7 @@ async function loadAuth() {
     auth.clientId = r.google_client_id;
     auth.user = r.user;
     auth.sources = r.sources || {};
+    auth.ai = r.ai || null;
   } catch (e) { /* server offline: stay guest */ }
   auth.ready = true;
   renderAuth();
@@ -329,6 +336,7 @@ async function onCredential(resp) {
   try {
     const r = await getJson('/api/auth/google', { method: 'POST', body: JSON.stringify({ credential: resp.credential }) });
     auth.user = r.user;
+    try { auth.ai = (await getJson('/api/auth/config')).ai || auth.ai; } catch (e) { /* keep what we had */ }
     $('#signin-modal').classList.add('hidden');
     renderAuth();
     rerender();
@@ -682,7 +690,7 @@ let lastData = null;     // parsed + this tab's data for the company
 function buildData() {
   const p = lastParsed.parsed;
   const entry = p.company ? store.companies[p.company.toLowerCase()] : null;
-  let questions = entry ? entry.questions : [];
+  let questions = entry ? aiApply(entry, entry.questions) : [];
   let roleMatched;
   if (p.role && questions.length) {
     const f = questions.filter(q => (q.role_title || '').toLowerCase().includes(p.role.toLowerCase()));
@@ -690,7 +698,8 @@ function buildData() {
     if (f.length) questions = f;
   }
   return { query: lastParsed.query, parsed: p, company: entry ? { name: entry.name } : null,
-           questions, reviews: entry ? entry.reviews : [], experiences: entry ? (entry.experiences || []) : [],
+           questions, reviews: entry ? entry.reviews : [],
+           experiences: entry ? (entry.experiences || []).map(x => ({ ...x, questions: aiApply(entry, x.questions, false) })) : [],
            official: entry ? (entry.official || []) : [],
            role_matched: roleMatched };
 }
@@ -708,6 +717,10 @@ async function runSearch(q, src) {
       const known = Object.values(store.companies).map(c => c.name);
       const qs = 'q=' + encodeURIComponent(q) + known.map(k => '&known=' + encodeURIComponent(k)).join('');
       lastParsed = await getJson('/api/parse?' + qs);
+      if (aiReady() && aiWantsParse(lastParsed.parsed)) {
+        $('#understood').textContent = 'Reading your search with AI…';
+        lastParsed = await aiParse(lastParsed);
+      }
     }
     rerender(src);
     window.scrollTo(0, 0);
@@ -720,9 +733,10 @@ async function runSearch(q, src) {
 function rerender(src = currentSrc()) {
   if (!lastParsed || $('#results').classList.contains('hidden')) return;
   lastData = buildData();
-  if (src === 'JD' && jdNow()) return renderJdPage(lastData);
-  if (!signedIn()) return renderGuest(lastData);
-  render(lastData, src);
+  if (src === 'JD' && jdNow()) renderJdPage(lastData);
+  else if (!signedIn()) renderGuest(lastData);
+  else render(lastData, src);
+  aiSchedule();
 }
 
 const companyName = (d) => d.company ? d.company.name : d.parsed.company;
@@ -749,6 +763,7 @@ function understoodLine(p) {
     </span>
     ${p.corrected_from ? `<span class="u-note">Showing results for <b>${esc(p.company)}</b>. You typed “${esc(p.corrected_from)}”.</span>` : ''}
     ${p.company_source === 'guess' ? `<span class="u-note">Prepify took “${esc(p.company)}” to be the company. If that's wrong, click Edit.</span>` : ''}
+    ${p.company_source === 'ai' ? `<span class="u-note">Read with AI assist. If anything's wrong, click Edit.</span>` : ''}
     <form class="u-edit hidden" id="u-form">
       <label>Company<input id="u-company" value="${esc(p.company || '')}" /></label>
       <label>Role<input id="u-role" value="${esc(p.role || '')}" placeholder="Any" /></label>
@@ -807,9 +822,11 @@ function renderGuest(d) {
       <div class="row"><span>Mode</span><span class="off">Guest · links only</span></div>
       <button class="btn" data-signin>Sign in to pull sources</button>
       <p class="note">When you're signed in, Prepify reads Glassdoor and AmbitionBox in the background with your own Chrome and shows everything here.</p>
+      ${aiPanelHtml()}
       ${jdPanelHtml()}
     </div>`;
   $$('#panel [data-signin]').forEach(b => b.onclick = openSignin);
+  wireAiPanel();
   wireJdPanel(d);
 }
 
@@ -970,7 +987,7 @@ function renderDashboard(d, groups) {
   const name = companyName(d);
   const withData = groups.filter(hasData);
   const anything = withData.length > 0;
-  let html = `${jdBanner(d)}<div class="sources-head">
+  let html = `${jdBanner(d)}${aiStripHtml(d)}<div class="sources-head">
       <span>Results from <b>${withData.length}</b> of ${groups.length} sources <span class="hint">· Click a box to open its page</span></span>
       ${anything ? '<button class="btn small" data-pdf="">Download PDF</button>' : ''}
     </div>
@@ -992,6 +1009,7 @@ function renderDashboard(d, groups) {
   }
   wireCards(name);
   wireJdBanner(d);
+  wireAiStrip();
   wirePdf();
 }
 
@@ -1019,7 +1037,7 @@ function glance(d, withData) {
   d.questions.forEach(q => { const s = subjectOf(q); subjects[s] = (subjects[s] || 0) + 1; });
   const sites = new Map();
   d.questions.forEach(q => {
-    const k = norm(q.text);
+    const k = qKey(q);
     const e = sites.get(k) || { text: q.text, sites: new Set() };
     e.sites.add(q.source);
     sites.set(k, e);
@@ -1052,7 +1070,7 @@ function glance(d, withData) {
   if (Object.keys(subjects).length) {
     html += `<section class="section">
         <h2>Subjects asked</h2>
-        <p class="sub">Across all sources, worked out from each question's wording.</p>
+        <p class="sub">Across all sources, ${aiOn() && !ai.showOriginal ? 'tagged by AI assist' : "worked out from each question's wording"}.</p>
         <div class="chips static">${Object.entries(subjects).sort((a, b) => b[1] - a[1])
           .map(([s, n]) => `<span class="chip-btn">${esc(s)} <span>${n}</span></span>`).join('')}</div>
       </section>`;
@@ -1208,7 +1226,7 @@ function tabBody(k, g, groups) {
 
   if (k === 'questions') {
     const elsewhere = new Map();
-    groups.filter(o => o.name !== g.name).forEach(o => o.questions.forEach(q => elsewhere.set(norm(q.text), o.name)));
+    groups.filter(o => o.name !== g.name).forEach(o => o.questions.forEach(q => elsewhere.set(qKey(q), o.name)));
     const subjects = {};
     const qs = g.questions.map(q => { const subject = subjectOf(q); subjects[subject] = (subjects[subject] || 0) + 1; return { ...q, subject }; });
     const inJd = jdNow() ? qs.filter(q => jdSkillsIn(q.text).length).length : 0;
@@ -1221,7 +1239,7 @@ function tabBody(k, g, groups) {
         </div>
         <input class="qa-filter" id="qa-filter" placeholder="Filter questions…" aria-label="Filter questions" />
       </div>
-      <div class="qa-list">${qs.map((q, i) => qaCard(q, i, g.name, elsewhere.get(norm(q.text)))).join('')}</div>
+      <div class="qa-list">${qs.map((q, i) => qaCard(q, i, g.name, elsewhere.get(qKey(q)))).join('')}</div>
       <p class="qa-none hidden" id="qa-none">No questions match.</p>`;
   }
 
@@ -1354,6 +1372,13 @@ function xpCard(x, i) {
     </details>`;
 }
 
+// "Technical round", unless the subject already says it ("Coding & DSA" + "Coding")
+function roundTag(q) {
+  const r = (q.round_type || '').trim();
+  if (!r || (q.subject || '').toLowerCase().startsWith(r.toLowerCase())) return '';
+  return `<span class="tag">${esc(/round$/i.test(r) ? r : r + ' round')}</span>`;
+}
+
 function qaCard(q, i, site, alsoOn) {
   const answers = q.answers || [];
   const first = answers[0];
@@ -1364,7 +1389,7 @@ function qaCard(q, i, site, alsoOn) {
       <div class="qa-tags">
         <span class="tag">${esc(q.subject)}</span>
         ${jdTagsHtml(q.text)}
-        ${q.round_type ? `<span class="tag">${esc(q.round_type)}</span>` : ''}
+        ${roundTag(q)}
         ${q.difficulty ? `<span class="tag">${esc(q.difficulty)}</span>` : ''}
         ${alsoOn ? `<span class="tag good">Also on ${esc(alsoOn)}</span>` : ''}
       </div>
@@ -1394,7 +1419,7 @@ function reviewHtml(r) {
 function renderPanel(name, d) {
   const ratings = d.reviews.map(r => r.rating).filter(Boolean);
   const avg = ratings.length ? (ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(1) + ' / 5' : '–';
-  const unique = new Set(d.questions.map(q => norm(q.text))).size;
+  const unique = pulledQuestions(d).length;       // Q&A lists and questions inside experiences, once each
   const anything = d.questions.length || d.reviews.length || d.experiences.length;
   $('#panel').innerHTML = `
     <div class="panel">
@@ -1410,8 +1435,10 @@ function renderPanel(name, d) {
       <button class="linkbtn" id="panel-check">Run source check</button>
       <button class="linkbtn" id="panel-clear">Clear this session's data</button>
       <p class="note">Pulled data lives only in this browser tab. Closing the tab or signing out erases it.</p>
+      ${aiPanelHtml()}
       ${jdPanelHtml()}
     </div>`;
+  wireAiPanel();
   wireJdPanel(d);
   $('#panel-research').onclick = () => pullSources(name);
   $('#panel-check').onclick = () => runSourceCheck(name);
@@ -1617,6 +1644,7 @@ $('#home-research').onclick = async () => {
 // "/" focuses the search box
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    if ($('#ai-modal')) { closeAiConsent(); return; }     // the top dialog only
     $('#signin-modal').classList.add('hidden');
     closeJdModal();
     if (loginQueue[0]) hideLoginPrompt(loginQueue[0].site);
