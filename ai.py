@@ -78,17 +78,32 @@ def model_name(model_id=None):
 
 
 # ---------- the token budget: AI calls must never use up the provider's daily allowance ----------
-# Groq's free tier gives gpt-oss-120b 200,000 tokens a day. Prepify stops well before that:
-#   * DAILY_TOKENS for the whole server, USER_DAILY_TOKENS per signed-in user;
+# Groq's free tier gives each model 200,000 tokens a day, separately. Prepify keeps one pool per model:
+#   * "main" (MODEL): the brief, model answers, JD reading, search reading;
+#   * "fast" (FAST_MODEL): question tidying, so it never eats into the main pool and the other way round.
+# In each pool, Prepify stops well before Groq's limit:
+#   * a daily budget for the whole server and one per signed-in user;
 #   * every call reserves its worst case (prompt + reply allowance) before it is sent, and the actual
 #     usage Groq reports replaces the reservation afterwards;
 #   * automatic background work (question tidying) stops while less than BACKGROUND_FLOOR of the
-#     user's budget is left, so what's left is kept for things the user asks for.
+#     user's share of that pool is left, so what's left is kept for things the user asks for.
 # The ledger is a small file next to the app (no user content, only counts), so restarts don't reset it.
 DAILY_TOKENS = int(os.environ.get('PREPIFY_AI_DAILY_TOKENS', '160000') or 160000)
 USER_DAILY_TOKENS = int(os.environ.get('PREPIFY_AI_USER_DAILY_TOKENS', '50000') or 50000)
+FAST_DAILY_TOKENS = int(os.environ.get('PREPIFY_AI_FAST_DAILY_TOKENS', '160000') or 160000)
+FAST_USER_DAILY_TOKENS = int(os.environ.get('PREPIFY_AI_FAST_USER_DAILY_TOKENS', '80000') or 80000)
 BACKGROUND_FLOOR = 0.4
 USAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.prepify-usage.json')   # app.py moves it
+
+
+def _limits(pool):
+    """(server budget, per-user budget) for a pool, read at call time so tests and .env changes apply."""
+    return (FAST_DAILY_TOKENS, FAST_USER_DAILY_TOKENS) if pool == 'fast' else (DAILY_TOKENS, USER_DAILY_TOKENS)
+
+
+def pool_of(model):
+    return 'fast' if model and model == FAST_MODEL and FAST_MODEL != MODEL else 'main'
+
 
 _lock = threading.Lock()
 _ledger = {}
@@ -97,6 +112,10 @@ _ctx = threading.local()          # the user and kind of work for the call being
 
 def _ukey(email):
     return hashlib.sha256((email or '').lower().encode()).hexdigest()[:20]
+
+
+def _blank_pool():
+    return {'tokens': 0, 'reserved': 0, 'exhausted': False}
 
 
 def _today():
@@ -109,14 +128,31 @@ def _today():
                 saved = json.load(f)
         except (OSError, ValueError):
             pass
+        if saved.get('day') != day:
+            saved = {'day': day, 'pools': {}, 'users': {}}
+        if 'pools' not in saved:                   # a ledger from before pools: it was all the main model
+            saved = {'day': day, 'pools': {'main': {'tokens': saved.get('tokens', 0), 'exhausted': saved.get('exhausted', False)}},
+                     'users': {k: {'requests': u.get('requests', 0), 'pools': {'main': {'tokens': u.get('tokens', 0)}}}
+                               for k, u in saved.get('users', {}).items()}}
         _ledger.clear()
-        _ledger.update(saved if saved.get('day') == day else {'day': day, 'tokens': 0, 'users': {}, 'exhausted': False})
-        _ledger['reserved'] = 0
+        _ledger.update(saved)
+        for pool in ('main', 'fast'):
+            p = _ledger['pools'].setdefault(pool, _blank_pool())
+            p.setdefault('tokens', 0)
+            p.setdefault('exhausted', False)
+            p['reserved'] = 0
+        for u in _ledger['users'].values():
+            for pool in ('main', 'fast'):
+                up = u.setdefault('pools', {}).setdefault(pool, {'tokens': 0})
+                up['reserved'] = 0
     return _ledger
 
 
 def _save():
-    data = {k: v for k, v in _ledger.items() if k != 'reserved'}
+    data = {'day': _ledger['day'],
+            'pools': {k: {'tokens': v['tokens'], 'exhausted': v['exhausted']} for k, v in _ledger['pools'].items()},
+            'users': {k: {'requests': u['requests'], 'pools': {pk: {'tokens': pv['tokens']} for pk, pv in u['pools'].items()}}
+                      for k, u in _ledger['users'].items()}}
     try:
         tmp = USAGE_FILE + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as f:
@@ -127,33 +163,54 @@ def _save():
 
 
 def _user(led, email):
-    return led['users'].setdefault(_ukey(email), {'tokens': 0, 'reserved': 0, 'requests': 0})
+    return led['users'].setdefault(_ukey(email), {'requests': 0, 'pools': {
+        'main': {'tokens': 0, 'reserved': 0}, 'fast': {'tokens': 0, 'reserved': 0}}})
+
+
+def _left(led, pool, u=None):
+    """(left on the server, left for the user or None) in a pool."""
+    server_budget, user_budget = _limits(pool)
+    p = led['pools'][pool]
+    server_left = 0 if p['exhausted'] else max(0, server_budget - p['tokens'] - p['reserved'])
+    if u is None:
+        return server_left, None
+    up = u['pools'][pool]
+    return server_left, max(0, min(server_left, user_budget - up['tokens'] - up['reserved']))
 
 
 def budget(email=None):
+    """The main pool in the top-level keys (what the user's clicks spend), the tidying pool under "fast"."""
     with _lock:
         led = _today()
-        server_left = 0 if led['exhausted'] else max(0, DAILY_TOKENS - led['tokens'] - led['reserved'])
-        out = {'server_left': server_left, 'server_budget': DAILY_TOKENS}
-        if email:
-            u = _user(led, email)
-            out.update(user_left=max(0, min(server_left, USER_DAILY_TOKENS - u['tokens'] - u['reserved'])),
-                       user_budget=USER_DAILY_TOKENS, requests_left=max(0, DAILY_LIMIT - u['requests']))
+        u = _user(led, email) if email else None
+        out = {}
+        for pool in ('main', 'fast'):
+            server_budget, user_budget = _limits(pool)
+            server_left, user_left = _left(led, pool, u)
+            entry = {'server_left': server_left, 'server_budget': server_budget}
+            if u is not None:
+                entry.update(user_left=user_left, user_budget=user_budget)
+            if pool == 'main':
+                out.update(entry)
+            else:
+                out['fast'] = entry
+        if u is not None:
+            out['requests_left'] = max(0, DAILY_LIMIT - u['requests'])
         return out
 
 
-def begin(email, background=False):
+def begin(email, background=False, pool='main'):
     """Before an AI request for a user: count it, and refuse when the user or the server is out of budget."""
     with _lock:
         led = _today()
         u = _user(led, email)
-        if led['exhausted'] or DAILY_TOKENS - led['tokens'] - led['reserved'] < 1500:
-            raise AILimit("Today's AI budget for Prepify is used up. AI assist is back tomorrow; "
-                          'everything else keeps working.')
-        left = USER_DAILY_TOKENS - u['tokens'] - u['reserved']
-        if left < 1500:
-            raise AILimit("You've used today's AI budget. AI assist is back tomorrow; everything else keeps working.")
-        if background and left < BACKGROUND_FLOOR * USER_DAILY_TOKENS:
+        server_left, user_left = _left(led, pool, u)
+        what = 'question tidying' if pool == 'fast' else 'AI'
+        if server_left < 1500:
+            raise AILimit(f"Today's {what} budget for Prepify is used up. It's back tomorrow; everything else keeps working.")
+        if user_left < 1500:
+            raise AILimit(f"You've used today's {what} budget. It's back tomorrow; everything else keeps working.")
+        if background and user_left < BACKGROUND_FLOOR * _limits(pool)[1]:
             raise AILimit('Paused to save your AI budget for the things you ask for.')
         if u['requests'] >= DAILY_LIMIT:
             raise AILimit(f"You've made {DAILY_LIMIT} AI requests today. AI assist is back tomorrow.")
@@ -173,40 +230,41 @@ def refund(email):
     end()
 
 
-def _reserve(n):
-    """Hold n tokens for the coming call, or refuse if the budget can't cover its worst case."""
+def _reserve(n, pool='main'):
+    """Hold n tokens in a pool for the coming call, or refuse if the budget can't cover its worst case."""
     email = getattr(_ctx, 'email', None)
     with _lock:
         led = _today()
-        if led['exhausted'] or DAILY_TOKENS - led['tokens'] - led['reserved'] < n:
+        u = _user(led, email) if email else None
+        server_left, user_left = _left(led, pool, u)
+        if server_left < n:
             raise AILimit("Not enough of today's AI budget is left for this. Try something smaller, or tomorrow.")
-        if email:
-            u = _user(led, email)
-            left = USER_DAILY_TOKENS - u['tokens'] - u['reserved']
-            floor = BACKGROUND_FLOOR * USER_DAILY_TOKENS if getattr(_ctx, 'background', False) else 0
-            if left - n < floor:
+        if u is not None:
+            floor = BACKGROUND_FLOOR * _limits(pool)[1] if getattr(_ctx, 'background', False) else 0
+            if user_left - n < floor:
                 raise AILimit('Paused to save your AI budget for the things you ask for.'
                               if floor else "Not enough of your AI budget is left today for this.")
-            u['reserved'] += n
-        led['reserved'] += n
+            u['pools'][pool]['reserved'] += n
+        led['pools'][pool]['reserved'] += n
     return email
 
 
-def _settle(email, reserved, used):
+def _settle(email, reserved, used, pool='main'):
     with _lock:
         led = _today()
-        led['reserved'] = max(0, led['reserved'] - reserved)
-        led['tokens'] += used
+        p = led['pools'][pool]
+        p['reserved'] = max(0, p['reserved'] - reserved)
+        p['tokens'] += used
         if email:
-            u = _user(led, email)
-            u['reserved'] = max(0, u['reserved'] - reserved)
-            u['tokens'] += used
+            up = _user(led, email)['pools'][pool]
+            up['reserved'] = max(0, up['reserved'] - reserved)
+            up['tokens'] += used
         _save()
 
 
-def _mark_exhausted():
+def _mark_exhausted(pool='main'):
     with _lock:
-        _today()['exhausted'] = True
+        _today()['pools'][pool]['exhausted'] = True
         _save()
 
 
@@ -218,8 +276,8 @@ def status(user):
            'limit': DAILY_LIMIT, 'remaining': None, 'tokens': None}
     if on:
         b = budget(user['email'] if user else None)
+        out['remaining'] = b.pop('requests_left', None)
         out['tokens'] = b
-        out['remaining'] = b.get('requests_left')
     return out
 
 
@@ -238,8 +296,8 @@ def _post(body, timeout=120):
         if r.status_code == 429 and attempt < 3:
             message = _error_message(r)
             if re.search(r'per day|\bTPD\b|\bRPD\b', message):
-                if body.get('model') == MODEL:          # Prompt Guard's own daily limit doesn't stop the main model
-                    _mark_exhausted()
+                if body.get('model') in (MODEL, FAST_MODEL):   # Prompt Guard's own daily limit doesn't stop either pool
+                    _mark_exhausted(pool_of(body.get('model')))
                 raise AILimit('The daily AI allowance on this Groq key is used up. AI assist is back tomorrow.')
             wait = _retry_after(r)
             if wait <= 30:
@@ -306,13 +364,14 @@ def _call(system, content, schema, effort='low', max_tokens=6000, model=None):
         'max_completion_tokens': reply,
     }
     worst = _tokens(prompt) + reply + 100
-    email = _reserve(worst)
+    pool = pool_of(body['model'])
+    email = _reserve(worst, pool)
     used = 0
     try:
         data = _post(body)
         used = int((data.get('usage') or {}).get('total_tokens') or worst)
     finally:
-        _settle(email, worst, used)
+        _settle(email, worst, used, pool)
     choice = (data.get('choices') or [{}])[0]
     if choice.get('finish_reason') == 'length':
         raise AIError('The AI reply was too long and got cut off. Try with less text.')

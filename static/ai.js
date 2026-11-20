@@ -30,10 +30,16 @@ function aiNoteStatus(s) {
   if (!s) return;
   auth.ai = s;
   $$('[data-ai-left]').forEach(el => { el.textContent = aiLeftText(); });
+  $$('[data-ai-fast-left]').forEach(el => { el.textContent = aiFastLeftText(); });
   $$('[data-ai-bar]').forEach(el => { el.style.width = aiLeftPct() + '%'; });
 }
 const aiLeftText = () => {
   const t = auth.ai && auth.ai.tokens;
+  if (!t || t.user_left === undefined) return '–';
+  return `${fmtTokens(t.user_left)} of ${fmtTokens(t.user_budget)}`;
+};
+const aiFastLeftText = () => {
+  const t = auth.ai && auth.ai.tokens && auth.ai.tokens.fast;
   if (!t || t.user_left === undefined) return '–';
   return `${fmtTokens(t.user_left)} of ${fmtTokens(t.user_budget)}`;
 };
@@ -126,8 +132,9 @@ function aiPanelHtml() {
     <h3>AI assist</h3>
     <div class="kind">${esc(aiModelName())} · ${esc(aiProvider())}</div>
     <div class="row"><span>Status</span><span class="${on ? 'ok' : 'off'}">${on ? 'On' : 'Off'}</span></div>
-    <div class="row"><span>AI tokens left</span><span data-ai-left>${aiLeftText()}</span></div>
+    <div class="row" title="For the brief, model answers, job descriptions and search reading"><span>AI tokens left</span><span data-ai-left>${aiLeftText()}</span></div>
     <div class="ai-budget" title="Prepify stops before the AI provider's daily limit"><span data-ai-bar style="width:${aiLeftPct()}%"></span></div>
+    <div class="row" title="Question tidying has its own daily budget, on a faster model"><span>Tidying tokens left</span><span data-ai-fast-left>${aiFastLeftText()}</span></div>
     <button class="btn" data-ai-toggle>${on ? 'Turn off AI assist' : 'Turn on AI assist'}</button>`;
 }
 

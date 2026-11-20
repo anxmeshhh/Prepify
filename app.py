@@ -122,7 +122,7 @@ def analyse_jd():
 
 
 # ---------- AI assist (ai.py): signed-in users only, within a daily token budget ----------
-def _ai_begin(background=False):
+def _ai_begin(background=False, pool='main'):
     """The signed-in user, after checking and counting against the AI budget; or an error response."""
     user = current_user()
     if not user:
@@ -130,7 +130,7 @@ def _ai_begin(background=False):
     if not ai.available():
         return None, (jsonify({'error': 'AI assist is not set up on this server.', 'ai': ai.status(user)}), 503)
     try:
-        ai.begin(user['email'], background)
+        ai.begin(user['email'], background, pool)
     except ai.AILimit as e:
         return None, (jsonify({'error': str(e), 'paused': background, 'ai': ai.status(user)}), 429)
     return user, None
@@ -157,7 +157,7 @@ def ai_questions():
     if not isinstance(items, list) or not items:
         return jsonify({'error': 'no questions sent'}), 400
     known = body.get('known') if isinstance(body.get('known'), list) else []
-    user, err = _ai_begin(background=bool(body.get('background')))
+    user, err = _ai_begin(background=bool(body.get('background')), pool='fast')
     if err:
         return err
     try:

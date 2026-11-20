@@ -234,7 +234,8 @@ def test_jd_endpoint_falls_back_to_the_rules(client, fake_ai):
 def test_status_is_in_the_auth_config(client, fake_ai):
     s = client.get('/api/auth/config').get_json()['ai']
     assert s['provider'] == 'Groq' and s['model_name'] == 'GPT-OSS 120B' and s['remaining'] is None
-    assert s['tokens'] == {'server_left': ai.DAILY_TOKENS, 'server_budget': ai.DAILY_TOKENS}
+    assert s['tokens'] == {'server_left': ai.DAILY_TOKENS, 'server_budget': ai.DAILY_TOKENS,
+                           'fast': {'server_left': ai.FAST_DAILY_TOKENS, 'server_budget': ai.FAST_DAILY_TOKENS}}
     sign_in(client)
     s = client.get('/api/auth/config').get_json()['ai']
     assert s['remaining'] == ai.DAILY_LIMIT and s['tokens']['user_left'] == ai.USER_DAILY_TOKENS
@@ -374,3 +375,25 @@ def test_resume_rewrites_only_rephrase(fake_ai, before, after, kept):
     fake_ai['set'](ai.RESUME_SCHEMA, {'fit_summary': '', 'talking_points': [], 'stories': [], 'gaps': [],
                                       'rewrites': [{'before': before, 'after': after, 'why': ''}]})
     assert bool(ai.resume_coach({'skills': []}, resume)['rewrites']) is kept
+
+
+def test_tidying_has_its_own_pool(fake_groq):
+    """Tidying (the fast model) and the main features never spend each other's budget."""
+    ai.begin('a@example.com', pool='fast')
+    ai._call('system', 'hello', SCHEMA, max_tokens=2000, model=ai.FAST_MODEL)
+    b = ai.budget('a@example.com')
+    assert b['user_left'] == ai.USER_DAILY_TOKENS                         # main pool untouched
+    assert b['fast']['user_left'] == ai.FAST_USER_DAILY_TOKENS - 1000
+
+
+def test_a_ledger_from_before_pools_counts_as_the_main_pool(tmp_path, monkeypatch):
+    import json
+    from datetime import date
+    f = tmp_path / 'old.json'
+    f.write_text(json.dumps({'day': date.today().isoformat(), 'tokens': 25239, 'exhausted': False,
+                             'users': {ai._ukey('a@example.com'): {'tokens': 25239, 'reserved': 0, 'requests': 8}}}))
+    monkeypatch.setattr(ai, 'USAGE_FILE', str(f))
+    ai._ledger.clear()
+    b = ai.budget('a@example.com')
+    assert b['user_left'] == ai.USER_DAILY_TOKENS - 25239 and b['fast']['user_left'] == ai.FAST_USER_DAILY_TOKENS
+    assert b['requests_left'] == ai.DAILY_LIMIT - 8
