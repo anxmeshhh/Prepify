@@ -1238,3 +1238,20 @@ a.btn:hover { text-decoration: none; }
 .chips.static { flex-wrap: wrap; overflow: visible; }
 .chips.static .chip-btn { border-color: transparent; background: var(--element); color: var(--muted); cursor: default; height: 30px; }
 .chips.static .chip-btn:hover { border-color: transparent; color: var(--muted); }
+
+/* a source that needs something: what's wrong, and one boxed action */
+.st-action {
+  flex-shrink: 0; display: inline-flex; align-items: center; height: 28px; padding: 0 10px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm); font-size: 12px; font-weight: 700; color: var(--text);
+}
+.src-tile:hover .st-action { border-color: currentColor; }
+.src-tile.act { border-color: rgba(245, 167, 66, 0.55); }
+.src-tile.act .st-sub, .src-tile.act .st-action { color: var(--warn); }
+.src-tile.act .st-action { border-color: rgba(245, 167, 66, 0.55); }
+.src-tile.fail { border-color: rgba(224, 108, 117, 0.45); }
+.src-tile.fail .st-sub { color: var(--error); }
+.src-tile.none .st-sub { color: var(--muted); }
+.dash-note { display: block; font-size: 13px; color: var(--muted); margin-top: var(--space-2); }
+.dash-note.act { color: var(--warn); }
+.src-tile.busy .st-sub { display: -webkit-box; white-space: normal; }
+.st-sub .spinner { display: inline-block; vertical-align: -2px; margin-right: 6px; }

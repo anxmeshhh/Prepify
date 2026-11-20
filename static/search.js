@@ -902,11 +902,20 @@ const STATUS_TEXT = {
   cancelled: 'Cancelled. Click to retry.'
 };
 
-const STATUS_SHORT = {
-  working: 'Reading…', login: 'Sign-in needed', 'needs-url': 'Add the careers page link', blocked: 'Verification needed',
-  'not-found': 'No results · try again', empty: 'No results · try again', timeout: 'Timed out · try again',
-  error: 'Failed · try again', cancelled: 'Cancelled · try again'
+// What each outcome means, and the one thing to do about it. "act" needs the user on the site first;
+// "fail" and "none" can simply run again. Every action re-runs only that source.
+const STATUS_INFO = {
+  working: { text: 'Reading…' },
+  login: { text: 'Sign-in needed', action: 'Sign in', kind: 'act' },
+  blocked: { text: 'Human check', action: 'Verify', kind: 'act' },
+  'needs-url': { text: 'Link needed', action: 'Add link', kind: 'act' },
+  timeout: { text: 'Too slow to load', action: 'Retry', kind: 'fail' },
+  error: { text: "Couldn't read page", action: 'Retry', kind: 'fail' },
+  cancelled: { text: 'Stopped early', action: 'Retry', kind: 'fail' },
+  'not-found': { text: 'Nothing found', action: 'Retry', kind: 'none' },
+  empty: { text: 'No questions found', action: 'Retry', kind: 'none' }
 };
+const RETRYABLE = ['timeout', 'error', 'cancelled', 'not-found', 'empty'];
 
 // A source as one tile: the name and one line (counts, or what's happening). Pulled ones link to their page.
 function sourceCard(g, company) {
@@ -918,17 +927,20 @@ function sourceCard(g, company) {
   const counts = g.official.length ? plural(g.official.length, 'official page')
     : [g.questions.length && plural(g.questions.length, 'question'), g.experiences.length && plural(g.experiences.length, 'experience')]
       .filter(Boolean).join(' · ') || (g.reviews.length ? plural(g.reviews.length, 'review') : '');
-  const status = busy ? (step || STATUS_SHORT.working) : (pull && !has ? STATUS_SHORT[pull.status] : null);
-  const kind = busy ? 'busy' : status ? (pull.status === 'not-found' || pull.status === 'empty' ? 'none' : 'warn') : '';
+  const info = !busy && pull && !has ? STATUS_INFO[pull.status] : null;
+  const status = busy ? (step || STATUS_INFO.working.text) : (info ? info.text : null);
+  const kind = busy ? 'busy' : info ? info.kind : '';
   const open = has && !busy;
   const tag = open ? 'a' : 'button';
   const attrs = open ? `href="${urlFor(lastData.query, g.name)}" data-nav` : `type="button" data-src="${esc(g.name)}"`;
   const tip = pull && !busy && pull.status !== 'done' ? ` title="${esc([STATUS_TEXT[pull.status], pull.detail].filter(Boolean).join(' '))}"` : '';
-  return `<${tag} class="src-tile ${kind}" ${attrs}${tip}>
+  const label = info ? `${g.name}: ${info.text}. ${info.action} runs ${g.name} again.` : null;
+  return `<${tag} class="src-tile ${kind}" ${attrs}${tip}${label ? ` aria-label="${esc(label)}"` : ''}>
       <span class="mark" style="--c:${s.color}">${esc(s.mark)}</span>
       <span class="st-text"><b>${esc(g.name)}</b>
         <span class="st-sub">${busy ? '<span class="spinner"></span>' : ''}${esc(status || counts || 'Nothing found')}</span></span>
-      <span class="st-arrow" aria-hidden="true">${busy ? '' : has ? '→' : '↻'}</span>
+      ${info ? `<span class="st-action">${esc(info.action)}</span>`
+             : `<span class="st-arrow" aria-hidden="true">${busy ? '' : has ? '→' : '↻'}</span>`}
     </${tag}>`;
 }
 
@@ -986,26 +998,63 @@ function renderDashboard(d, groups) {
   const nq = pulledQuestions(d).length;
   const nx = (d.experiences || []).length;
   let html = `
-    <header class="dash-head">
-      <div class="dash-title">
-        <h2>${esc(name)}</h2>
-        <p>${anything ? `${plural(nq, 'question')} · ${plural(nx, 'experience')} · from ${plural(withData.length, 'source')}. Open a source to read everything it has.`
-          : 'Nothing pulled yet. Pull the sources and their questions and experiences appear here.'}</p>
-      </div>
-      <div class="dash-actions">
-        <button class="btn ${anything ? '' : 'primary'}" data-pull-all>Pull all sources</button>
-        ${anything ? '<button class="btn primary" data-pdf="">Download PDF</button>' : ''}
-      </div>
-    </header>
+    ${dashHeadHtml(d, groups, name)}
     <div id="sources">${sourcesHtml(groups, name)}</div>
     ${jdBanner(d)}${aiStripHtml(d)}`;
   if (anything) html += glance(d, withData);
   $('#report').innerHTML = html;
-  $$('[data-pull-all]').forEach(b => b.onclick = () => pullSources(name));
+  wireDashHead(name);
   wireBrief(d);
   wireCards(name);
   wireJdBanner(d);
   wireAiStrip();
+  wirePdf();
+}
+
+// Sources whose last pull didn't work, by what they need.
+function sourceProblems(groups, name) {
+  const out = { act: [], retry: [] };
+  groups.forEach(g => {
+    const pull = pulls[pullKey(name, g.name)];
+    if (!pull || hasData(g) || !STATUS_INFO[pull.status]) return;
+    if (STATUS_INFO[pull.status].kind === 'act') out.act.push({ name: g.name, action: STATUS_INFO[pull.status].action });
+    else if (RETRYABLE.includes(pull.status)) out.retry.push(g.name);
+  });
+  return out;
+}
+
+const listNames = (xs) => xs.length < 3 ? xs.join(' and ') : xs.slice(0, -1).join(', ') + ' and ' + xs.at(-1);
+
+function dashHeadHtml(d, groups, name) {
+  const withData = groups.filter(hasData);
+  const anything = withData.length > 0;
+  const nq = pulledQuestions(d).length;
+  const nx = (d.experiences || []).length;
+  const prob = sourceProblems(groups, name);
+  const notes = [];
+  if (prob.act.length) notes.push(`<span class="dash-note act">Needs you: ${prob.act.map(x => `${esc(x.name)} (${esc(x.action.toLowerCase())})`).join(', ')}. Click the tile; Prepify then runs only that source again.</span>`);
+  if (prob.retry.length) notes.push(`<span class="dash-note">${esc(listNames(prob.retry))} didn't finish or found nothing. Retry runs only ${prob.retry.length === 1 ? 'that one' : 'those'}.</span>`);
+  return `<header class="dash-head" id="dash-head">
+      <div class="dash-title">
+        <h2>${esc(name)}</h2>
+        <p>${anything ? `${plural(nq, 'question')} · ${plural(nx, 'experience')} · from ${plural(withData.length, 'source')}. Open a source to read everything it has.`
+          : 'Nothing pulled yet. Pull the sources and their questions and experiences appear here.'}</p>
+        ${notes.join('')}
+      </div>
+      <div class="dash-actions">
+        ${prob.retry.length ? `<button class="btn" data-retry-failed>Retry ${prob.retry.length === 1 ? esc(prob.retry[0]) : `${prob.retry.length} failed`}</button>` : ''}
+        <button class="btn ${anything ? '' : 'primary'}" data-pull-all>Pull all sources</button>
+        ${anything ? '<button class="btn primary" data-pdf="">Download PDF</button>' : ''}
+      </div>
+    </header>`;
+}
+
+function wireDashHead(name) {
+  $$('[data-pull-all]').forEach(b => b.onclick = () => pullSources(name));
+  $$('[data-retry-failed]').forEach(b => b.onclick = () => {
+    const retry = sourceProblems(groupBySource(lastData), name).retry;
+    if (retry.length) pullSources(name, retry);           // only the ones that failed
+  });
   wirePdf();
 }
 
@@ -1092,7 +1141,10 @@ function refreshBoxes() {
   const box = $('#sources');
   if (!box) return;
   const name = companyName(lastData);
-  box.innerHTML = sourcesHtml(groupBySource(lastData), name);
+  const groups = groupBySource(lastData);
+  box.innerHTML = sourcesHtml(groups, name);
+  const head = $('#dash-head');
+  if (head) { head.outerHTML = dashHeadHtml(lastData, groups, name); wireDashHead(name); }
   wireCards(name);
 }
 
