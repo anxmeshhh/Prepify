@@ -12,7 +12,7 @@ import secrets
 
 from flask import Flask, jsonify, render_template, request, session
 
-try:  # settings from .env (GOOGLE_CLIENT_ID, PREPIFY_SECRET, ANTHROPIC_API_KEY); real environment variables win
+try:  # settings from .env (GOOGLE_CLIENT_ID, PREPIFY_SECRET, GROQ_API_KEY); real environment variables win
     from dotenv import load_dotenv
     load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
 except ImportError:
@@ -49,23 +49,20 @@ def parse():
 @app.route('/api/jd', methods=['POST'])
 def analyse_jd():
     """Analyse a job description (file or pasted text) and, optionally, a resume.
-    With use_ai=1 (signed in, AI set up) the AI reads it, including scanned PDFs and photos; the rules are the
-    fallback. Nothing is kept: the text is read, analysed and the result is returned."""
+    With use_ai=1 (signed in, AI set up) the AI reads it; the rules are the fallback.
+    Nothing is kept: the text is read, analysed and the result is returned."""
     user = current_user()
     use_ai = request.form.get('use_ai') == '1' and bool(user) and ai.available()
     jd_file = request.files.get('jd_file')
-    text = file_data = media_type = None
+    text = None
     try:
         if jd_file and jd_file.filename:
             raw = jd_file.read(jd_reader.MAX_BYTES + 1)
             try:
                 text = jd_reader.text_from_upload(jd_file.filename, raw)
-            except jd_reader.NeedsAI as e:
-                if not use_ai:
-                    raise jd_reader.JDError(str(e) if ai.available() and user else
-                                            'That file has no text Prepify can read (it may be a scanned image or a '
-                                            'photo). Paste the text instead.')
-                file_data, media_type = e.data, e.media_type
+            except jd_reader.NeedsAI:          # the AI provider has no vision model, so these need pasting
+                raise jd_reader.JDError('That file has no text Prepify can read (it may be a scanned image or a '
+                                        'photo). Paste the text instead.')
         else:
             text = request.form.get('jd_text', '')
         resume_text = ''
@@ -85,19 +82,17 @@ def analyse_jd():
         try:
             ai.charge(user['email'])
             try:
-                analysis, jd_text = ai.read_jd(text, file_data, media_type, resume_text)
+                analysis, _ = ai.read_jd(text, resume_text)
             except Exception:
                 ai.refund(user['email'])
                 raise
-            return jsonify({'analysis': analysis, 'text': jd_text if jd_file else None, 'ai': ai.status(user)})
+            return jsonify({'analysis': analysis, 'text': text if jd_file else None, 'ai': ai.status(user)})
         except jd_reader.JDError as e:
             return jsonify({'error': str(e)}), 400
-        except Exception as e:                       # AI failed: the rules still read text JDs
+        except Exception as e:                       # AI failed or the text was flagged: the rules still read it
             if not isinstance(e, ai.AIError):
                 app.logger.exception('AI JD reading failed')
             ai_note = str(e) if isinstance(e, ai.AIError) else 'AI assist failed unexpectedly.'
-            if file_data is not None:
-                return jsonify({'error': f'{ai_note} Paste the JD text instead.', 'ai': ai.status(user)}), 502
     try:
         result = jd_reader.analyze(text, resume_text)
     except jd_reader.JDError as e:

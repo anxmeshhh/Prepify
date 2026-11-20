@@ -82,7 +82,7 @@ You can also write it explicitly: `company:"Target" role:"Data Analyst" intervie
 
 ## Job description analysis
 
-Click **Add job description** on the home page, the results page or the side panel. Paste the JD or upload it (PDF, DOCX or TXT; with AI assist also scanned PDFs and images), and optionally add your resume. Prepify analyses it on the server, sends the result back and keeps nothing; the result lives in your tab like everything else. Works in guest mode too.
+Click **Add job description** on the home page, the results page or the side panel. Paste the JD or upload it (PDF, DOCX or TXT), and optionally add your resume. Prepify analyses it on the server, sends the result back and keeps nothing; the result lives in your tab like everything else. Works in guest mode too.
 
 The JD page has these tabs:
 
@@ -98,13 +98,15 @@ The JD analysis is also the first section of the PDF.
 
 ## AI assist (optional)
 
-With an Anthropic API key in `.env` (`ANTHROPIC_API_KEY=...`, then restart), signed-in users can turn on **AI assist**. It uses Claude (`claude-opus-5-5` by default; set `PREPIFY_AI_MODEL` to change it). It stays off until the user reads what it sends and turns it on, and it can be turned off any time in the side panel.
+With a Groq API key in `.env` (`GROQ_API_KEY=...`, then restart), signed-in users can turn on **AI assist**. The work is done by `openai/gpt-oss-120b` (set `PREPIFY_AI_MODEL` to change it). It stays off until the user reads what it sends and turns it on, and it can be turned off any time in the side panel.
 
 - **Tidy pulled questions:** fixes messy scraped text, hides things that aren't questions, merges the same question asked in different words across sources, and tags each question by subject, round and difficulty. This runs automatically for new questions while AI assist is on, and **Show as pulled** brings back the original text.
-- **Read any job description:** any layout, including scanned PDFs and photos or screenshots of a JD. It adds a *Worth checking* list (bond, shifts, missing salary and so on). If the AI is unavailable, the standard reading is used for text JDs.
+- **Read any job description:** a deeper reading of pasted or uploaded JDs. It fills the same tabs as the standard reading and adds a *Worth checking* list (bond, shifts, missing salary and so on). Anything the AI leaves empty, and the round predictions when the JD states no process, come from the standard reading. If the AI is unavailable, the standard reading is used. Scanned PDFs and photos still need pasting, because there is no vision model on this provider.
 - **Understand any search:** when the standard parser can't find the company or has to guess, the AI reads the search (typos, descriptions, unusual wording).
 
-The questions, JD, resume and searches are sent to Anthropic's API and the results come straight back; Prepify stores nothing. Each user gets `PREPIFY_AI_DAILY_LIMIT` AI requests a day (60 by default; counted in memory). If the main model declines a request, it is retried on `PREPIFY_AI_FALLBACK_MODEL` (`claude-opus-5`; leave it empty to turn this off). All AI code is in `ai.py`.
+**Prompt injection screening:** scraped questions, JDs and searches are first checked by Llama Prompt Guard 2 (`meta-llama/llama-prompt-guard-2-22m`). Text that tries to give the AI instructions is never sent to it: a flagged question is kept as pulled, a flagged JD gets the standard reading, and a flagged search uses the standard parser.
+
+The questions, JD and searches are sent to Groq's API and the results come straight back; the resume is never sent, and Prepify stores nothing. Each user gets `PREPIFY_AI_DAILY_LIMIT` AI requests a day (60 by default, counted in memory). Groq's free tier allows 8,000 tokens a minute for gpt-oss-120b, so questions go in batches of 40 and Prepify waits and retries when Groq asks it to. All AI code is in `ai.py`.
 
 ## Using results
 
@@ -120,7 +122,7 @@ The questions, JD, resume and searches are sent to Anthropic's API and the resul
 | Path | What it is |
 | --- | --- |
 | `app.py` | Flask routes: `/api/parse`, `/api/jd`, `/api/ai/*`, Google sign-in (`/api/auth/*`), official pages and Reddit; no database |
-| `ai.py` | AI assist (Claude): question tidying, JD reading and search reading, with the daily limit |
+| `ai.py` | AI assist (Groq: gpt-oss-120b, screened by Prompt Guard 2): question tidying, JD reading and search reading, with the daily limit |
 | `query_parser.py` | Understanding search queries: company, role, level, location, rounds, topics |
 | `jd.py`, `skills.py` | Job description and resume analysis, and the skills list with revision topics and practice questions |
 | `tests/` | `python -m pytest tests` |

@@ -114,7 +114,7 @@ function openJdModal(step = 'input') {
 
       <div class="field">
         <div class="field-head"><label for="jd-text">Job description</label>
-          <label class="file-btn"><input type="file" id="jd-file" accept="${aiReady() ? JD_ACCEPT_AI : JD_ACCEPT}" /><span id="jd-file-label">${aiReady() ? 'Upload PDF, DOCX, TXT or image' : 'Upload PDF, DOCX or TXT'}</span></label></div>
+          <label class="file-btn"><input type="file" id="jd-file" accept="${aiFiles() ? JD_ACCEPT_AI : JD_ACCEPT}" /><span id="jd-file-label">${aiFiles() ? 'Upload PDF, DOCX, TXT or image' : 'Upload PDF, DOCX or TXT'}</span></label></div>
         <div class="file-name hidden" id="jd-file-name"></div>
         <textarea id="jd-text" rows="9" placeholder="Paste the job description here, or upload the file"></textarea>
       </div>
@@ -210,7 +210,7 @@ function renderJdConfirm(el) {
         <label>Role<input id="jd-role" value="${esc(a.title || '')}" placeholder="Role" /></label>
       </div>
       ${a.company_source === 'mentioned' ? '<p class="note">The company was guessed from names mentioned in the JD. Please check it.</p>' : ''}
-      ${a.ai ? `<p class="note">Read with AI assist${a.ai.from_file ? ', straight from the file' : ''}.</p>` : ''}
+      ${a.ai ? `<p class="note">Read with AI assist (${esc(a.ai.model_name || a.ai.model)}).</p>` : ''}
       <div class="form-error hidden" id="jd-error" role="alert"></div>
       <div class="login-actions">
         <button class="btn primary" type="submit">Show the analysis</button>

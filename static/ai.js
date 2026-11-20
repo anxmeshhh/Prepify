@@ -1,8 +1,8 @@
-/* Prepify: AI assist (Claude through the Prepify server).
+/* Prepify: AI assist (the server's AI provider, Groq by default; see ai.py).
    Off until the signed-in user turns it on after reading what is sent. When on, it
      - tidies pulled questions: cleans the text, hides non-questions, merges the same question across
        sources and tags each by subject, round and difficulty;
-     - reads job descriptions of any layout, including scanned PDFs and photos (see jd.js);
+     - reads job descriptions of any layout (see jd.js);
      - reads searches the standard parser can't (see runSearch in search.js).
    Results are kept in this tab with the pulled data. Uses helpers from search.js at call time. */
 
@@ -22,10 +22,9 @@ const aiOn = () => signedIn() && aiPref() === 'on';
 const aiReady = () => aiOn() && aiAvailable();
 const aiOffer = () => signedIn() && aiAvailable() && !aiPref();
 
-function prettyModel(id) {
-  const m = /^claude-([a-z]+)-(\d+)(?:-(\d+))?$/.exec(id || '');
-  return m ? `Claude ${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? '.' + m[3] : ''}` : (id || 'Claude');
-}
+const aiModelName = () => (auth.ai && (auth.ai.model_name || auth.ai.model)) || 'AI';
+const aiProvider = () => (auth.ai && auth.ai.provider) || 'the AI provider';
+const aiFiles = () => aiReady() && !!(auth.ai && auth.ai.files);     // can the provider read scanned PDFs and photos?
 
 function aiNoteStatus(s) {
   if (!s) return;
@@ -50,21 +49,22 @@ function openAiConsent(then) {
         <span class="mark big" style="--c:var(--link)">AI</span>
         <div>
           <h2 id="ai-title">Turn on AI assist</h2>
-          <p class="modal-sub">Uses ${esc(prettyModel(auth.ai && auth.ai.model))}, Anthropic's AI, through the Prepify server.</p>
+          <p class="modal-sub">Uses ${esc(aiModelName())} on ${esc(aiProvider())}, through the Prepify server.</p>
         </div>
       </div>
       <div class="ai-does">
         <div class="xp-label">What it does</div>
         <ul class="jd-list">
           <li>Tidies pulled questions: fixes messy text, hides things that aren't questions, merges the same question across sources and tags each by round and difficulty.</li>
-          <li>Reads job descriptions in any layout, including scanned PDFs and photos.</li>
+          <li>Reads job descriptions in any layout${auth.ai && auth.ai.files ? ', including scanned PDFs and photos' : ''}, and lists points worth checking.</li>
           <li>Understands searches the standard reading can't.</li>
         </ul>
       </div>
       <div class="ai-sends">
         <div class="xp-label">What is sent</div>
-        <p>The questions you pull, any job description and resume you add, and searches Prepify can't read are sent
-          to Anthropic's API to be processed. The results come straight back to this tab. Prepify stores nothing on its server.</p>
+        <p>The questions you pull, any job description you add, and searches Prepify can't read are sent to
+          ${esc(aiProvider())}'s API to be processed. Your resume is not sent. The results come straight back to this tab,
+          and Prepify stores nothing on its server.${auth.ai && auth.ai.guard ? ' Text is screened first, and anything that tries to give the AI instructions is left out.' : ''}</p>
       </div>
       <p class="modal-note">Up to ${esc(auth.ai ? auth.ai.limit : 60)} AI requests a day. Turn it off any time in the side panel and Prepify goes back to its standard reading.</p>
       <div class="login-actions">
@@ -101,20 +101,20 @@ function aiPanelHtml() {
       <div class="panel-sep"></div>
       <h3>AI assist</h3>
       <div class="row"><span>Status</span><span class="off">Not set up</span></div>
-      <p class="note">Add ANTHROPIC_API_KEY to the server's .env file and restart Prepify to use AI assist.</p>` : '';
+      <p class="note">Add GROQ_API_KEY to the server's .env file and restart Prepify to use AI assist.</p>` : '';
   }
   if (!signedIn()) {
     return `
       <div class="panel-sep"></div>
       <h3>AI assist</h3>
-      <div class="kind">${esc(prettyModel(auth.ai.model))}</div>
+      <div class="kind">${esc(aiModelName())} · ${esc(aiProvider())}</div>
       <p class="note">Sign in to tidy questions, read any job description and understand any search with AI.</p>`;
   }
   const on = aiOn();
   return `
     <div class="panel-sep"></div>
     <h3>AI assist</h3>
-    <div class="kind">${esc(prettyModel(auth.ai.model))}</div>
+    <div class="kind">${esc(aiModelName())} · ${esc(aiProvider())}</div>
     <div class="row"><span>Status</span><span class="${on ? 'ok' : 'off'}">${on ? 'On' : 'Off'}</span></div>
     <div class="row"><span>Requests left today</span><span data-ai-left>${aiLeftText()}</span></div>
     <button class="btn" data-ai-toggle>${on ? 'Turn off AI assist' : 'Turn on AI assist'}</button>`;
@@ -323,11 +323,11 @@ const JD_ACCEPT_AI = '.pdf,.docx,.txt,.md,.png,.jpg,.jpeg,.webp';
 function aiJdNoteHtml() {
   if (aiReady()) {
     return `<div class="ai-note"><span class="mark tiny" style="--c:var(--link)">AI</span>
-      <span>AI assist will read this JD, in any layout, including scanned PDFs and photos.</span></div>`;
+      <span>AI assist will read this JD${aiFiles() ? ', in any layout, including scanned PDFs and photos' : ' and list points worth checking'}.</span></div>`;
   }
   if (signedIn() && aiAvailable()) {
     return `<div class="ai-note"><span class="mark tiny" style="--c:var(--link)">AI</span>
-      <span><button class="linkbtn accent" type="button" data-ai-jd-on>Turn on AI assist</button> to read any layout, including scanned PDFs and photos.</span></div>`;
+      <span><button class="linkbtn accent" type="button" data-ai-jd-on>Turn on AI assist</button> for a deeper reading of any layout.</span></div>`;
   }
   return '';
 }
@@ -339,8 +339,8 @@ function wireAiJdNote() {
     const note = $('#jd-modal .ai-note');
     if (note) note.outerHTML = aiJdNoteHtml();
     const f = $('#jd-file');
-    if (f) f.accept = JD_ACCEPT_AI;
+    if (f && aiFiles()) f.accept = JD_ACCEPT_AI;
     const label = $('#jd-file-label');
-    if (label) label.textContent = 'Upload PDF, DOCX, TXT or image';
+    if (label && aiFiles()) label.textContent = 'Upload PDF, DOCX, TXT or image';
   });
 }
