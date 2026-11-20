@@ -415,7 +415,7 @@ function jdTabBody(k, d, ctx) {
       <div class="plan-progress">
         <div class="bar"><span style="width:${pct}%"></span></div>
         <span><b>${prog.done}</b> of ${plural(prog.total, 'topic')} done</span>
-        ${prog.done ? '<button class="linkbtn" data-plan-reset>Reset</button>' : ''}
+        ${prog.done ? '<button class="linkbtn danger" data-plan-reset>Reset</button>' : ''}
       </div>
       <p class="sub">Ordered by what the JD stresses and what candidates were actually asked. Tick topics off as you go; progress stays in this tab.</p>
       ${scheduleHtml(d)}
@@ -557,7 +557,7 @@ function wireJdTab(k, d) {
       if (tabCount) tabCount.textContent = `${prog.done}/${prog.total}`;
     });
     const reset = $('[data-plan-reset]');
-    if (reset) reset.onclick = () => { jdNow().done = {}; saveStore(); renderJdPage(d); };
+    confirmClick(reset, () => { jdNow().done = {}; saveStore(); renderJdPage(d); });
   }
   const pull = $('[data-jd-pull]');
   if (pull) pull.onclick = () => signedIn() ? pullSources(companyName(d)) : openSignin();
@@ -617,12 +617,12 @@ function jdPanelHtml() {
     <div class="kind">${esc(jd.role || jd.analysis.title || 'Role')}${jd.company ? ' · ' + esc(jd.company) : ''}</div>
     <button class="btn" data-jd-open>Open JD analysis</button>
     <button class="linkbtn" data-jd-add>Replace</button>
-    <button class="linkbtn" data-jd-remove>Remove</button>`;
+    <button class="linkbtn danger" data-jd-remove>Remove</button>`;
 }
 
 function wireJdPanel(d) {
   wireJdBanner(d);
-  $$('[data-jd-remove]').forEach(b => b.onclick = () => { delete store.jd; saveStore(); rerender(); });
+  $$('[data-jd-remove]').forEach(b => confirmClick(b, () => { delete store.jd; saveStore(); rerender(); }));
 }
 
 // tags on question cards: which JD skills a question touches

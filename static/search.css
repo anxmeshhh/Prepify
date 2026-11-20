@@ -1068,3 +1068,109 @@ a.btn:hover { text-decoration: none; }
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
 }
 .qa-tools > .btn { align-self: flex-start; }
+
+
+/* =================================================================================================
+   Spacious and consistent: one spacing scale, one card padding, two control heights, every action boxed
+   ================================================================================================= */
+:root {
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 20px;
+  --space-6: 24px; --space-8: 32px; --space-10: 40px; --space-12: 48px; --space-14: 56px;
+  --card-pad: 20px;            /* every card and panel */
+  --grid-gap: 16px;            /* every grid and list of cards */
+  --control-h: 40px;           /* buttons */
+  --control-h-sm: 34px;        /* small buttons, boxed text actions */
+  --radius-sm: 6px;            /* controls; cards keep --radius */
+}
+
+/* page frame */
+.topbar-inner { padding: 14px var(--gutter); }
+.layout { padding: var(--space-8) var(--gutter) 96px; gap: var(--space-12); }
+@media (min-width: 1025px) { .layout:not(.wide) { grid-template-columns: minmax(0, 1fr) 320px; } }
+.understood { margin-bottom: var(--space-8); }
+.section { margin-bottom: var(--space-14); }
+.section h2 { margin-bottom: var(--space-2); }
+.section .sub { margin-bottom: var(--space-5); }
+.crumbs { margin-bottom: var(--space-6); gap: var(--space-3) var(--space-5); }
+.source-hero { padding: var(--space-6); margin-bottom: var(--space-4); }
+.tabs { margin-bottom: var(--space-8); }
+.page-foot { margin-top: var(--space-10); padding-top: var(--space-6); }
+.sources-head { margin-bottom: var(--space-4); }
+.notice, .empty { padding: var(--space-5) var(--space-6); margin-bottom: var(--space-8); }
+.jd-banner, .ai-strip { padding: var(--space-4) var(--space-5); margin-bottom: var(--space-6); }
+.qa-tools { gap: var(--space-4); margin-bottom: var(--space-6); }
+.chips { gap: 10px; }
+
+/* one card padding */
+.qa-card, .source-card, .jd-card, .skill-card, .round-card, .glance-card, .sched-day, .thread,
+.official-page, .rewrite, .gap-card { padding: var(--card-pad); }
+.xp-card > summary { padding: var(--card-pad); }
+.xp-body { padding: var(--space-2) var(--card-pad) var(--card-pad); }
+.plan-item > summary { padding: var(--space-4) var(--card-pad); }
+.plan-body { padding: var(--space-2) var(--card-pad) var(--card-pad); }
+.link-row { padding: var(--space-3) var(--space-4); }
+.panel { padding: 22px; }
+.panel .row { padding: 10px 0; }
+.panel-sep { margin: var(--space-6) 0 var(--space-5); }
+
+/* one gap between cards */
+.source-grid, .glance-grid, .jd-grid, .skill-grid, .brief-grid, .coach-grid, .sched, .link-grid,
+.qa-list, .xp-list, .round-list, .plan-list, .thread-list, .official-list { gap: var(--grid-gap); }
+.link-grid { gap: var(--space-3); }
+
+/* two control heights */
+.btn { height: var(--control-h); padding: 0 18px; border-radius: var(--radius-sm); }
+.btn.small { height: var(--control-h-sm); padding: 0 14px; }
+.chip-btn { height: 32px; padding: 0 14px; }
+
+/* every action is a visible box; only breadcrumbs stay as text links */
+.linkbtn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: var(--control-h-sm); padding: 0 14px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: transparent; color: var(--text); font-size: 12px; white-space: nowrap; text-decoration: none;
+  transition: border-color .15s, color .15s, background-color .15s;
+}
+.linkbtn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); text-decoration: none; }
+.linkbtn.accent { color: var(--accent); border-color: rgba(250, 178, 131, 0.45); }
+.linkbtn.danger { color: var(--error); border-color: rgba(224, 108, 117, 0.45); }
+.linkbtn.danger:hover { color: var(--error); border-color: var(--error); background: rgba(224, 108, 117, 0.08); }
+.linkbtn.armed, .linkbtn.armed:hover { color: var(--bg); background: var(--error); border-color: var(--error); font-weight: 700; }
+.crumb-path .linkbtn { height: auto; padding: 0; border: none; background: none; color: var(--muted); font-size: 13px; }
+.crumb-path .linkbtn:hover { color: var(--text); background: none; text-decoration: underline; }
+
+/* where boxed actions sit */
+.panel .btn { margin-top: var(--space-4); }
+.panel .btn + .btn { margin-top: 10px; }
+.panel .linkbtn { display: flex; width: 100%; margin-top: 10px; }
+.panel .note { margin-top: var(--space-4); }
+.login-actions { gap: var(--space-3); }
+.auth .linkbtn { height: 32px; }
+#u-edit { height: 28px; padding: 0 10px; }
+.more-btn { margin: var(--space-3) 0 0 44px; }
+.ai-note .linkbtn { display: inline-flex; height: 28px; padding: 0 10px; margin: 0 6px 0 0; vertical-align: middle; }
+.brief-foot .linkbtn { height: 28px; padding: 0 10px; margin-left: 6px; vertical-align: middle; }
+.ai-answer-btn { display: inline-flex; margin: var(--space-3) 0 0 44px; }
+.plan-progress .linkbtn { height: 28px; }
+
+/* home: actions and examples as boxes, with room to breathe */
+.tagline { margin-bottom: var(--space-8); }
+.home-actions { margin-top: 28px; gap: var(--space-3); }
+.promo { margin-top: var(--space-12); display: flex; flex-direction: column; align-items: center; gap: var(--space-3); }
+.offered { margin-top: var(--space-6); display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: var(--space-2); }
+.example {
+  height: 32px; padding: 0 var(--space-3); margin: 0;
+  border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--muted);
+  transition: border-color .15s, color .15s;
+}
+.example:hover { border-color: var(--link); color: var(--link); text-decoration: none; }
+
+@media (max-width: 1024px) {
+  .layout { gap: var(--space-8); }
+}
+@media (max-width: 640px) {
+  :root { --card-pad: 16px; }
+  .layout { padding-top: var(--space-6); }
+  .section { margin-bottom: var(--space-12); }
+  .more-btn, .ai-answer-btn { margin-left: 0; }
+}

@@ -411,7 +411,7 @@ function scheduleHtml(d) {
       <label>Interview date<input type="date" id="sched-date" name="interview-date" autocomplete="off" min="${minDate}" value="${esc(s.date || '')}" required /></label>
       <label>Hours a day<select id="sched-hours" name="hours">${[1, 2, 3, 4, 5, 6].map(h => `<option ${+(s.hours || 2) === h ? 'selected' : ''}>${h}</option>`).join('')}</select></label>
       <button class="btn small primary" type="submit">${sch ? 'Update schedule' : 'Make schedule'}</button>
-      ${sch ? '<button class="linkbtn" type="button" data-sched-clear>Remove</button>' : ''}
+      ${sch ? '<button class="linkbtn danger" type="button" data-sched-clear>Remove</button>' : ''}
     </form>
     ${body}
   </section>`;
@@ -427,7 +427,7 @@ function wireSchedule(d) {
     renderJdPage(d);
   };
   const clear = $('[data-sched-clear]');
-  if (clear) clear.onclick = () => { delete jdNow().schedule; saveStore(); renderJdPage(d); };
+  confirmClick(clear, () => { delete jdNow().schedule; saveStore(); renderJdPage(d); });
 }
 
 function writeSchedulePdf(api, d) {

@@ -314,7 +314,8 @@ function renderAuth() {
   $$('[data-signout]').forEach(b => b.onclick = signOut);
   $('#mode-line').innerHTML = auth.user
     ? `Signed in as <b>${esc(auth.user.name)}</b>. Pulled data stays in this tab only and is gone when you close it.`
-    : `Guest mode shows links only. <button class="linkbtn accent" data-signin>Sign in with Google</button> to pull questions, answers and experiences into Prepify.`;
+    : `<span>Guest mode shows links only. Sign in with Google to pull questions, answers and experiences into Prepify.</span>
+       <button class="linkbtn accent" data-signin>Sign in with Google</button>`;
   $$('#mode-line [data-signin]').forEach(b => b.onclick = openSignin);
 }
 
@@ -545,6 +546,19 @@ function renderLoginPrompt() {
     window.postMessage({ source: 'prepify-page', type: 'login:open', site: item.site, company: item.company }, location.origin);
   el.querySelector('[data-login-retry]').onclick = () => { hideLoginPrompt(item.site); pullSources(item.company, [item.site]); };
   el.querySelector('[data-login-skip]').onclick = () => hideLoginPrompt(item.site);
+}
+
+// Destructive buttons ask once more: the first click arms them for a few seconds, the second acts.
+function confirmClick(btn, act, label = 'Click again to confirm') {
+  if (!btn) return;
+  btn.onclick = () => {
+    if (btn.dataset.armed) { clearTimeout(btn._disarm); act(); return; }
+    const before = btn.textContent;
+    btn.dataset.armed = '1';
+    btn.textContent = label;
+    btn.classList.add('armed');
+    btn._disarm = setTimeout(() => { delete btn.dataset.armed; btn.textContent = before; btn.classList.remove('armed'); }, 4000);
+  };
 }
 
 function toast(text) {
@@ -1442,7 +1456,7 @@ function renderPanel(name, d) {
       <button class="btn" id="panel-research">Pull all sources</button>
       ${anything ? '<button class="btn primary" data-pdf>Download PDF</button>' : ''}
       <button class="linkbtn" id="panel-check">Run source check</button>
-      <button class="linkbtn" id="panel-clear">Clear this session's data</button>
+      <button class="linkbtn danger" id="panel-clear">Clear this session's data</button>
       <p class="note">Pulled data lives only in this browser tab. Closing the tab or signing out erases it.</p>
       ${aiPanelHtml()}
       ${jdPanelHtml()}
@@ -1451,7 +1465,7 @@ function renderPanel(name, d) {
   wireJdPanel(d);
   $('#panel-research').onclick = () => pullSources(name);
   $('#panel-check').onclick = () => runSourceCheck(name);
-  $('#panel-clear').onclick = () => { clearStore(); Object.keys(pulls).forEach(k => delete pulls[k]); rerender(); };
+  confirmClick($('#panel-clear'), () => { clearStore(); Object.keys(pulls).forEach(k => delete pulls[k]); rerender(); });
 }
 
 // ---------- PDF export (built in the browser; nothing is uploaded) ----------
