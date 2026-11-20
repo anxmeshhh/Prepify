@@ -1,0 +1,41 @@
+PREPIFY: interview experiences, questions and answers for any company
+=====================================================================
+
+START
+1. Unzip this folder anywhere (for example, your Desktop).
+2. Double-click Prepify.exe.
+   - If Windows shows "Windows protected your PC", click "More info", then "Run anyway".
+     (The app isn't code-signed, so Windows warns about it.)
+3. A black window opens and Prepify opens in your browser at http://localhost:5000.
+   Keep the black window open while you use Prepify. Close it to stop Prepify.
+
+SEARCH
+Type a company and role, for example "Accenture data analyst interview questions".
+Without signing in you get links to every source.
+
+PULL QUESTIONS AND EXPERIENCES INTO PREPIFY
+1. Click "Sign in" (top right) and sign in with your Google account.
+2. Add the Prepify Capture extension to Chrome (one time):
+   a. Open chrome://extensions in Chrome.
+   b. Turn on "Developer mode" (top right).
+   c. Click "Load unpacked" and choose the "extension" folder from this zip.
+   d. Reload the Prepify tab.
+3. Search a company and click "Pull all sources". Prepify reads the sites in the
+   background with your own Chrome. If a site needs you to sign in, Prepify tells you.
+
+AI ASSIST (OPTIONAL)
+AI assist tidies pulled questions, reads job descriptions in more depth and understands
+unusual searches. It needs your own free Groq key:
+1. Create a key at https://console.groq.com/keys
+2. In this folder, next to Prepify.exe, create a text file named .env containing one line:
+   GROQ_API_KEY=your-key-here
+3. Close the black window and start Prepify.exe again. Then turn on AI assist in the side panel.
+
+PRIVACY
+Everything you pull stays in your browser tab and is erased when you close the tab or sign out.
+Prepify keeps no database. Your Google, Glassdoor and other passwords are never seen by Prepify.
+
+PROBLEMS
+- "Port 5000 is being used by another program": close that program and start Prepify again.
+- Google sign-in says access is blocked: ask the person who shared Prepify to add your Google
+  account as a test user.

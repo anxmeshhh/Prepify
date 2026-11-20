@@ -26,16 +26,16 @@ Signing in with Google only identifies you to Prepify. It can't log you in to Gl
 
 ```bash
 pip install -r requirements.txt
-python app.py                      # guest mode works out of the box
+python app.py                      # opens http://localhost:5000 in your browser
 ```
 
-Open http://localhost:5000.
+Google sign-in works out of the box: Prepify's client ID is built in.
 
-### Enable Google sign-in
+### Use your own Google sign-in client (optional)
 
 1. In Google Cloud Console, go to **APIs & Services → Credentials → Create credentials → OAuth client ID** and choose **Web application**.
 2. Add `http://localhost:5000` as an authorised JavaScript origin.
-3. Copy `.env.example` to `.env` and fill in `GOOGLE_CLIENT_ID`, plus any long random `PREPIFY_SECRET` so sign-ins survive restarts. `.env` is git-ignored, and no client secret is needed. Then run `python app.py`.
+3. Copy `.env.example` to `.env` and set `GOOGLE_CLIENT_ID` (it overrides the built-in one), plus any long random `PREPIFY_SECRET` so sign-ins survive restarts. `.env` is git-ignored, and no client secret is needed. Then run `python app.py`.
 
 ### Load the extension (needed for pulling)
 
@@ -117,6 +117,30 @@ The questions, JD and searches are sent to Groq's API and the results come strai
 - **Source page:** tabs for *Experiences*, *Questions & answers*, *Discussions*, *Reviews* and *Source pages*, with filters by outcome or subject, a switcher between sources and **Back to results**. Browser back and forward work too.
 - **Download PDF:** all sources from the dashboard, or one source from its page. The PDF is built in your browser.
 
+## Sharing Prepify (Windows app)
+
+Prepify's Google sign-in client ID is built into `app.py`, so the people you share it with don't need Google Cloud, a `.env` file or any setup.
+
+**Build it (you, once per release):**
+
+```
+pip install -r requirements.txt pyinstaller
+python build_exe.py
+```
+
+This makes `dist/Prepify-windows.zip` (about 32 MB) with `Prepify.exe`, the `extension` folder and `HOW-TO-USE.txt`. Share that zip. Your `.env` is not included, so your Groq key stays with you.
+
+**What the people you share it with do:** unzip it and double-click `Prepify.exe`. A console window opens (closing it stops Prepify) and their browser opens Prepify at `http://localhost:5000`. Guest mode works straight away. To pull sources they sign in with their own Google account and load the extension once (`chrome://extensions` → Developer mode → Load unpacked → `extension`). For AI assist they put their own free Groq key in a `.env` file next to `Prepify.exe`. `HOW-TO-USE.txt` walks them through all of this.
+
+**Things to know:**
+
+- **Google sign-in for other people:** while the Google Cloud OAuth consent screen is in *Testing*, only accounts you add under *Test users* (up to 100) can sign in. To let anyone sign in, publish the app on the consent screen page. Prepify asks only for the basic sign-in scopes (name, email), which don't need Google's full app review; Google may still ask to verify the app's name and logo before showing them.
+- **Port 5000 is fixed.** Google sign-in (`http://localhost:5000` is the authorised JavaScript origin) and the extension are both set up for it. If another program holds the port, Prepify says so. If Prepify is already running, starting it again just opens the browser.
+- **Don't build your Groq key into the app.** Anything inside the `.exe` can be extracted and your allowance used by others. Each person adds their own key.
+- **Windows SmartScreen** warns about unsigned apps ("More info" → "Run anyway"). Code-signing the `.exe` removes the warning.
+- The `.exe` runs on Windows only. Build on a Mac with the same command for a Mac version.
+- Running from source: `python app.py` now uses the waitress server and opens the browser. Set `PREPIFY_DEBUG=1` in `.env` for Flask's auto-reloading development server.
+
 ## Project layout
 
 | Path | What it is |
@@ -128,6 +152,7 @@ The questions, JD and searches are sent to Groq's API and the results come strai
 | `tests/` | `python -m pytest tests` |
 | `templates/search.html`, `static/search.*`, `static/jd.js`, `static/ai.js` | Search home page, results pages, JD page, AI assist and in-tab session store |
 | `extension/` | Prepify Capture Chrome extension (Manifest V3) |
+| `build_exe.py`, `packaging/` | Builds the shareable Windows app (`dist/Prepify-windows.zip`) and its user guide |
 
 ## Data sources and terms
 

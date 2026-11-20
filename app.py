@@ -9,12 +9,19 @@ Everything pulled from Glassdoor / AmbitionBox lives only in the user's browser 
 import os
 import re
 import secrets
+import sys
 
 from flask import Flask, jsonify, render_template, request, session
 
+# Where the app's files are (inside the bundle when packaged with PyInstaller), and where the user's
+# own settings live (next to Prepify.exe when packaged, next to app.py otherwise).
+FROZEN = getattr(sys, 'frozen', False)
+BUNDLE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+HOME_DIR = os.path.dirname(sys.executable) if FROZEN else os.path.dirname(os.path.abspath(__file__))
+
 try:  # settings from .env (GOOGLE_CLIENT_ID, PREPIFY_SECRET, GROQ_API_KEY); real environment variables win
     from dotenv import load_dotenv
-    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
+    load_dotenv(os.path.join(HOME_DIR, '.env'))
 except ImportError:
     pass
 
@@ -22,7 +29,8 @@ import ai  # noqa: E402  (reads its settings from the environment loaded above)
 import jd as jd_reader  # noqa: E402
 from query_parser import parse_query  # noqa: E402
 
-app = Flask(__name__, static_folder='static', template_folder='templates')
+app = Flask(__name__, static_folder=os.path.join(BUNDLE_DIR, 'static'),
+            template_folder=os.path.join(BUNDLE_DIR, 'templates'))
 
 # Sessions are signed cookies, not server storage. Without PREPIFY_SECRET a fresh key is made
 # on every start, which simply signs everyone out after a restart.
@@ -33,7 +41,14 @@ app.config.update(
     SESSION_COOKIE_SAMESITE='Lax',
 )
 
-GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '').strip()
+# Prepify's own Google sign-in client. A client ID is public (it's sent to every browser), so it's built in:
+# people who run Prepify can sign in without setting anything up. GOOGLE_CLIENT_ID in .env overrides it.
+# It only works on the origins registered for it in Google Cloud Console: http://localhost:5000.
+DEFAULT_GOOGLE_CLIENT_ID = '896456277671-tbi2jc4cdppnu3blcrbsguesuvmfo0fu.apps.googleusercontent.com'
+GOOGLE_CLIENT_ID = (os.environ.get('GOOGLE_CLIENT_ID') or DEFAULT_GOOGLE_CLIENT_ID).strip()
+# Fixed at 5000: Google sign-in and the Prepify Capture extension are both registered for localhost:5000.
+# PREPIFY_PORT exists only for testing a build next to a running copy.
+PORT = int(os.environ.get('PREPIFY_PORT') or 5000)
 
 
 # ---------- Query understanding (query_parser.py) and job descriptions (jd.py) ----------
@@ -408,5 +423,56 @@ def home():
     return render_template('search.html')
 
 
+def _prepify_already_running():
+    """Is something already answering on the port, and is it Prepify?"""
+    import socket
+    with socket.socket() as s:
+        s.settimeout(0.5)
+        if s.connect_ex(('127.0.0.1', PORT)) != 0:
+            return None                           # the port is free
+    try:
+        import requests
+        return 'google_client_id' in requests.get(f'http://127.0.0.1:{PORT}/api/auth/config', timeout=2).json()
+    except Exception:
+        return False                              # something else holds the port
+
+
+def main():
+    """Start Prepify and open it in the browser. PREPIFY_DEBUG=1 runs Flask's auto-reloading dev server."""
+    import webbrowser
+    url = f'http://localhost:{PORT}'               # localhost, not 127.0.0.1: Google sign-in is registered for it
+    debug = os.environ.get('PREPIFY_DEBUG') == '1'
+    if debug and os.environ.get('WERKZEUG_RUN_MAIN'):
+        # the auto-reloader's restarted copy: its parent already holds the port for it, so don't check it
+        app.run(debug=True, port=PORT)
+        return
+    no_browser = os.environ.get('PREPIFY_NO_BROWSER') == '1'
+    running = _prepify_already_running()
+    if running:
+        print(f'Prepify is already running. Opening {url}')
+        if not no_browser:
+            webbrowser.open(url)
+        return
+    if running is False:
+        print(f'Port {PORT} is being used by another program, and Prepify needs it (Google sign-in and the '
+              f'extension are set up for localhost:{PORT}). Close that program and start Prepify again.')
+        if FROZEN:
+            input('Press Enter to close.')
+        sys.exit(1)
+
+    if debug:
+        app.run(debug=True, port=PORT)
+        return
+    print(f'Prepify is running at {url}\nKeep this window open while you use it; close it to stop Prepify.')
+    if not no_browser:
+        import threading
+        threading.Timer(1.0, webbrowser.open, [url]).start()
+    try:
+        from waitress import serve
+        serve(app, host='127.0.0.1', port=PORT, threads=8)
+    except ImportError:
+        app.run(host='127.0.0.1', port=PORT, threaded=True)
+
+
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    main()
