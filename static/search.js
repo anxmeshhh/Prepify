@@ -372,9 +372,37 @@ function pullSources(company, sites = PULLABLE) {
   viaServer.forEach(s => pullFromServer(company, s));
   if (!viaExtension.length) return;
   if (!hasExtension()) { showExtensionNotice(); return; }
-  viaExtension.forEach(site => { pulls[pullKey(company, site)] = { status: 'working', step: 'starting' }; });
-  window.postMessage({ source: 'prepify-page', type: 'research:start', company, sites: viaExtension }, location.origin);
+  viaExtension.forEach(site => { pulls[pullKey(company, site)] = { status: 'working', step: LOCATED_SITES.includes(site) ? 'finding the company page' : 'starting' }; });
   refreshBoxes();
+  startExtensionPull(company, viaExtension);
+}
+
+// Code360 and PrepInsta file companies under names that can't be guessed (TCS is tata-consultancy-services),
+// so the server finds the right page from each site's own index first, or says the site has nothing.
+const LOCATED_SITES = ['Code360', 'PrepInsta'];
+
+async function startExtensionPull(company, sites) {
+  const urls = {};
+  const match = {};
+  const go = [];
+  await Promise.all(sites.map(async (site) => {
+    if (!LOCATED_SITES.includes(site)) { go.push(site); return; }
+    try {
+      const r = await getJson(`/api/sources/locate?site=${encodeURIComponent(site)}&company=${encodeURIComponent(company)}`);
+      if (!r.covered) {
+        pulls[pullKey(company, site)] = { status: 'not-covered', detail: r.message };
+        noteDiag(site, 'not-found', { detail: r.message });
+        return;
+      }
+      urls[site] = r.url;
+      match[site] = r.match || [];
+      go.push(site);
+    } catch (e) {
+      go.push(site);                   // the index couldn't be read: fall back to the extension's own guess
+    }
+  }));
+  refreshBoxes();
+  if (go.length) window.postMessage({ source: 'prepify-page', type: 'research:start', company, sites: go, urls, match }, location.origin);
 }
 
 // Sources the Prepify server reads through an official API (nothing is stored there).
@@ -392,16 +420,17 @@ async function pullFromServer(company, site) {
     noteDiag(site, any ? 'done' : 'empty', { added });
     rerender();
   } catch (e) {
-    const needsUrl = site === 'Official' && /no official page known/i.test(e.message);
-    pulls[key] = { status: needsUrl ? 'needs-url' : 'error', detail: needsUrl ? null : e.message };
+    const needsUrl = site === 'Official' && !!(e.body && e.body.needs_url);
+    const why = needsUrl && e.body.reason !== 'unknown' ? e.message : null;
+    pulls[key] = { status: needsUrl ? 'needs-url' : 'error', detail: why || (needsUrl ? null : e.message), tried: e.body && e.body.tried };
     noteDiag(site, needsUrl ? 'needs-url' : 'error', { detail: e.message });
     refreshBoxes();
-    if (needsUrl) askOfficialLink(company);
+    if (needsUrl) askOfficialLink(company, why, e.body && e.body.tried);
   }
 }
 
 // No careers page known for this company: ask the user for the link once.
-function askOfficialLink(company) {
+function askOfficialLink(company, why = null, tried = null) {
   let el = $('#official-modal');
   if (!el) {
     el = document.createElement('div');
@@ -414,8 +443,10 @@ function askOfficialLink(company) {
   el.innerHTML = `
     <form class="modal-box">
       <h2>Add ${esc(company)}'s careers page</h2>
-      <p class="modal-sub">Prepify doesn't know ${esc(company)}'s official careers or campus-hiring page yet.
-        Paste its link and Prepify reads the eligibility, selection process and test pattern from it.</p>
+      <p class="modal-sub">${why ? `${esc(why)} Paste a different official page, such as its campus hiring or selection process page,`
+        : `Prepify doesn't know ${esc(company)}'s official careers or campus-hiring page yet. Paste its link`}
+        and Prepify reads the eligibility, selection process and test pattern from it.</p>
+      ${tried ? `<p class="modal-note">Tried: <a href="${esc(tried)}" target="_blank" rel="noopener noreferrer">${esc(tried)} ↗</a></p>` : ''}
       <input class="qa-filter" id="official-url" type="url" required placeholder="https://www.company.com/careers" aria-label="Careers page link" />
       <div class="login-actions">
         <button class="btn primary" type="submit">Read official page</button>
@@ -913,6 +944,7 @@ const STATUS_INFO = {
   error: { text: "Couldn't read page", action: 'Retry', kind: 'fail' },
   cancelled: { text: 'Stopped early', action: 'Retry', kind: 'fail' },
   'not-found': { text: 'Nothing found', action: 'Retry', kind: 'none' },
+  'not-covered': { text: 'Not covered', kind: 'none' },
   empty: { text: 'No questions found', action: 'Retry', kind: 'none' }
 };
 const RETRYABLE = ['timeout', 'error', 'cancelled', 'not-found', 'empty'];
@@ -934,13 +966,13 @@ function sourceCard(g, company) {
   const tag = open ? 'a' : 'button';
   const attrs = open ? `href="${urlFor(lastData.query, g.name)}" data-nav` : `type="button" data-src="${esc(g.name)}"`;
   const tip = pull && !busy && pull.status !== 'done' ? ` title="${esc([STATUS_TEXT[pull.status], pull.detail].filter(Boolean).join(' '))}"` : '';
-  const label = info ? `${g.name}: ${info.text}. ${info.action} runs ${g.name} again.` : null;
+  const label = info ? `${g.name}: ${info.text}.${info.action ? ` ${info.action} runs ${g.name} again.` : ''}` : null;
   return `<${tag} class="src-tile ${kind}" ${attrs}${tip}${label ? ` aria-label="${esc(label)}"` : ''}>
       <span class="mark" style="--c:${s.color}">${esc(s.mark)}</span>
       <span class="st-text"><b>${esc(g.name)}</b>
         <span class="st-sub">${busy ? '<span class="spinner"></span>' : ''}${esc(status || counts || 'Nothing found')}</span></span>
-      ${info ? `<span class="st-action">${esc(info.action)}</span>`
-             : `<span class="st-arrow" aria-hidden="true">${busy ? '' : has ? '→' : '↻'}</span>`}
+      ${info && info.action ? `<span class="st-action">${esc(info.action)}</span>`
+             : `<span class="st-arrow" aria-hidden="true">${busy || info ? '' : has ? '→' : '↻'}</span>`}
     </${tag}>`;
 }
 
@@ -1013,12 +1045,13 @@ function renderDashboard(d, groups) {
 
 // Sources whose last pull didn't work, by what they need.
 function sourceProblems(groups, name) {
-  const out = { act: [], retry: [] };
+  const out = { act: [], retry: [], missing: [] };
   groups.forEach(g => {
     const pull = pulls[pullKey(name, g.name)];
     if (!pull || hasData(g) || !STATUS_INFO[pull.status]) return;
     if (STATUS_INFO[pull.status].kind === 'act') out.act.push({ name: g.name, action: STATUS_INFO[pull.status].action });
     else if (RETRYABLE.includes(pull.status)) out.retry.push(g.name);
+    else if (pull.status === 'not-covered') out.missing.push(g.name);
   });
   return out;
 }
@@ -1033,6 +1066,7 @@ function dashHeadHtml(d, groups, name) {
   const prob = sourceProblems(groups, name);
   const notes = [];
   if (prob.act.length) notes.push(`<span class="dash-note act">Needs you: ${prob.act.map(x => `${esc(x.name)} (${esc(x.action.toLowerCase())})`).join(', ')}. Click the tile; Prepify then runs only that source again.</span>`);
+  if (prob.missing.length) notes.push(`<span class="dash-note">${esc(listNames(prob.missing))} ${prob.missing.length === 1 ? 'has' : 'have'} nothing for ${esc(name)}.</span>`);
   if (prob.retry.length) notes.push(`<span class="dash-note">${esc(listNames(prob.retry))} didn't finish or found nothing. Retry runs only ${prob.retry.length === 1 ? 'that one' : 'those'}.</span>`);
   return `<header class="dash-head" id="dash-head">
       <div class="dash-title">
@@ -1130,7 +1164,8 @@ function wireCards(name) {
       showLoginPrompt(src, name, pull.status);
       return;
     }
-    if (pull && pull.status === 'needs-url') { askOfficialLink(name); return; }
+    if (pull && pull.status === 'needs-url') { askOfficialLink(name, pull.detail, pull.tried); return; }
+    if (pull && pull.status === 'not-covered') { toast(pull.detail || `${src} has nothing for ${name}.`); return; }
     if (SITES[src]) pullSources(name, [src]);
   });
 }

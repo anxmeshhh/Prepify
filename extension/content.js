@@ -517,16 +517,16 @@
   }
 
   // Article links on a search or list page that mention the company, best matches first.
-  function articleLinks(company) {
+  function articleLinks(company, extra = []) {
     const cfg = ARTICLE_SOURCES[SOURCE];
-    const want = slug(company).split('-')[0];
+    const wants = [slug(company).split('-')[0], ...extra.map(w => String(w).toLowerCase())].filter(Boolean);
     const seen = new Set();
     return [...document.querySelectorAll('a[href]')]
       .filter(a => {
         const h = a.href.split('#')[0].split('?')[0];
         const text = (a.textContent + ' ' + h).toLowerCase();
         if (seen.has(h) || h === location.href.split('?')[0] || !cfg.link(h)) return false;
-        if (!text.includes(want) || !/interview|experience|question|recruit|selection|placement|round|syllabus|pattern/.test(text)) return false;
+        if (!wants.some(w => text.includes(w)) || !/interview|experience|question|recruit|selection|placement|round|syllabus|pattern/.test(text)) return false;
         seen.add(h);
         return true;
       })
@@ -676,7 +676,7 @@
     // Article sources (GeeksforGeeks, LeetCode Discuss, PrepInsta, Code360): queue a few articles, read each
     if (ARTICLE_SOURCES[SOURCE] && looksNotFound()) {
       if (job.reading) return send({ type: 'research:partial', payload: { questions: [], reviews: [], experiences: [] }, url: location.href });
-      const next = ARTICLE_SOURCES[SOURCE].fallback(job.company);
+      const next = job.located ? null : ARTICLE_SOURCES[SOURCE].fallback(job.company);   // a located page needs no guessing
       if (next && next !== location.href) return send({ type: 'research:navigate', url: next, step: 'opening the company page' });
       return fail('not-found');
     }
@@ -685,9 +685,9 @@
         const payload = { source: SOURCE, url: location.href, company_name: job.company, ...readArticlePage(true) };
         return send({ type: 'research:partial', payload, url: location.href });
       }
-      const links = articleLinks(job.company);
+      const links = articleLinks(job.company, job.match || []);
       if (links.length) return send({ type: 'research:queue', urls: links.slice(0, 4), step: `reading ${Math.min(links.length, 4)} articles` });
-      const next = ARTICLE_SOURCES[SOURCE].fallback(job.company);
+      const next = job.located ? null : ARTICLE_SOURCES[SOURCE].fallback(job.company);
       if (next && next !== location.href) return send({ type: 'research:navigate', url: next, step: 'opening company page' });
       return fail(looksLikeLoginWall() ? 'login' : 'not-found');
     }

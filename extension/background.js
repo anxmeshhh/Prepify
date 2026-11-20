@@ -118,13 +118,16 @@ async function loginCleared(tabId) {
   chrome.tabs.remove(tabId).catch(() => {});
 }
 
-async function startResearch(company, sites, uiTabId) {
+async function startResearch(company, sites, uiTabId, urls = {}, match = {}) {
   for (const site of sites) {
     if (API_SOURCES[site]) { runApiSource(site, company, uiTabId); continue; }
     if (!START_URL[site]) continue;
-    const tab = await chrome.tabs.create({ url: START_URL[site](company), active: false });
+    // Prepify may already know the company's page on this site (from the site's own index)
+    const located = urls && typeof urls[site] === 'string' && /^https:\/\//.test(urls[site]) ? urls[site] : null;
+    const tab = await chrome.tabs.create({ url: located || START_URL[site](company), active: false });
     const jobs = await getJobs();               // save before the page can ask "whoami"
-    jobs[tab.id] = { site, company, uiTabId, hops: 0, queue: [], read: 0, acc: null, started: Date.now() };
+    jobs[tab.id] = { site, company, uiTabId, hops: 0, queue: [], read: 0, acc: null, started: Date.now(),
+                     located: !!located, match: Array.isArray(match && match[site]) ? match[site].slice(0, 4) : [] };
     await setJobs(jobs);
     notifyUi(jobs[tab.id], 'working');
     setTimeout(() => finishJob(tab.id, 'timeout'), JOB_TIMEOUT_MS);
@@ -160,7 +163,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'research:start') {
-    startResearch(msg.company, msg.sites || [...Object.keys(START_URL), ...Object.keys(API_SOURCES)], tabId);
+    startResearch(msg.company, msg.sites || [...Object.keys(START_URL), ...Object.keys(API_SOURCES)], tabId, msg.urls, msg.match);
     return false;
   }
 

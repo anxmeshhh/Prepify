@@ -29,6 +29,7 @@ import ai  # noqa: E402  (reads its settings from the environment loaded above)
 
 ai.USAGE_FILE = os.path.join(HOME_DIR, '.prepify-usage.json')     # the AI token ledger: counts only, no content
 import jd as jd_reader  # noqa: E402
+import site_index  # noqa: E402
 from query_parser import parse_query  # noqa: E402
 
 app = Flask(__name__, static_folder=os.path.join(BUNDLE_DIR, 'static'),
@@ -369,8 +370,9 @@ def reddit_source():
 # Public company pages, fetched on request, robots.txt respected, nothing stored.
 # Known recruiters map to their careers pages; any other company needs the user to paste the link.
 OFFICIAL_PAGES = {
-    'tcs': 'https://www.tcs.com/careers',
-    'tata consultancy services': 'https://www.tcs.com/careers',
+    # A list means several start pages (the readable campus or hiring-process page first).
+    'tcs': ['https://www.tcs.com/careers/india/tcs-nqt', 'https://www.tcs.com/careers/india'],
+    'tata consultancy services': ['https://www.tcs.com/careers/india/tcs-nqt', 'https://www.tcs.com/careers/india'],
     'infosys': 'https://www.infosys.com/careers/',
     'accenture': 'https://www.accenture.com/in-en/careers',
     'wipro': 'https://careers.wipro.com/',
@@ -383,8 +385,8 @@ OFFICIAL_PAGES = {
     'amazon': 'https://www.amazon.jobs/en/',
     'microsoft': 'https://careers.microsoft.com/',
     'google': 'https://www.google.com/about/careers/applications/',
-    'target': 'https://india.target.com/',
-    'target corporation': 'https://india.target.com/',
+    'target': ['https://corporate.target.com/careers/career-areas/intern-entry-level', 'https://corporate.target.com/careers'],
+    'target corporation': ['https://corporate.target.com/careers/career-areas/intern-entry-level', 'https://corporate.target.com/careers'],
     'cme group': 'https://www.cmegroup.com/careers.html',
 }
 OFFICIAL_UA = 'Prepify/0.6 (personal interview preparation; reads public careers pages)'
@@ -450,25 +452,30 @@ def _read_official_page(url):
 
 @app.route('/api/sources/official', methods=['GET'])
 def official_source():
+    """Read a company's official careers pages. When nothing can be read, say why, so the user can act:
+    no page known, the site disallows automated reading (robots.txt), or its pages only build in a browser."""
     if not current_user():
         return jsonify({'error': 'sign in to pull sources'}), 401
     company = (request.args.get('company') or '').strip()[:100]
     url = (request.args.get('url') or '').strip()
-    if not url:
-        url = OFFICIAL_PAGES.get(company.lower()) or OFFICIAL_PAGES.get(company.lower().split(' ')[0], '')
-    if not url:
-        return jsonify({'error': 'no official page known', 'needs_url': True}), 404
+    starts = [url] if url else (OFFICIAL_PAGES.get(company.lower()) or OFFICIAL_PAGES.get(company.lower().split(' ')[0]) or [])
+    starts = [starts] if isinstance(starts, str) else list(starts)
+    if not starts:
+        return jsonify({'error': 'no official page known', 'needs_url': True, 'reason': 'unknown'}), 404
     from urllib.parse import urlsplit
-    if urlsplit(url).scheme not in ('http', 'https') or not urlsplit(url).netloc:
-        return jsonify({'error': 'that is not a web address'}), 400
+    for u in starts:
+        if urlsplit(u).scheme not in ('http', 'https') or not urlsplit(u).netloc:
+            return jsonify({'error': 'that is not a web address'}), 400
 
-    pages, seen, queue = [], set(), [url]
-    while queue and len(pages) < 4:
+    pages, seen, queue = [], set(), list(starts)
+    blocked = fetched = 0
+    while queue and len(pages) < 4 and len(seen) < 10:
         u = queue.pop(0)
         if u in seen:
             continue
         seen.add(u)
         if not _allowed_by_robots(u):
+            blocked += 1
             continue
         try:
             page = _read_official_page(u)
@@ -476,11 +483,36 @@ def official_source():
             continue
         if not page:
             continue
+        fetched += 1
         if page['sections']:
             pages.append({'title': page['title'], 'url': page['url'], 'sections': page['sections']})
         queue += [l for l in page['links'] if l not in seen]
-    return jsonify({'source': 'Official', 'url': url, 'company_name': company,
+    if not pages:
+        host = urlsplit(starts[0]).netloc.replace('www.', '')
+        if blocked and not fetched:
+            reason, msg = 'robots', f"{host} doesn't allow automated reading."
+        elif fetched:
+            reason, msg = 'unreadable', f"{host} builds its pages in the browser, so there is no hiring information Prepify can read."
+        else:
+            reason, msg = 'unreachable', f"{host} couldn't be reached."
+        return jsonify({'error': msg, 'needs_url': True, 'reason': reason, 'tried': starts[0]}), 404
+    return jsonify({'source': 'Official', 'url': starts[0], 'company_name': company,
                     'official': pages, 'questions': [], 'reviews': [], 'experiences': []})
+
+
+# ---------- Where a company lives on sites whose addresses can't be guessed (site_index.py) ----------
+@app.route('/api/sources/locate', methods=['GET'])
+def locate_source():
+    if not current_user():
+        return jsonify({'error': 'sign in to pull sources'}), 401
+    site = request.args.get('site') or ''
+    company = (request.args.get('company') or '').strip()[:100]
+    if site not in site_index.SITES or not company:
+        return jsonify({'error': 'site and company required'}), 400
+    try:
+        return jsonify(site_index.locate(site, company))
+    except site_index.IndexError_ as e:
+        return jsonify({'error': str(e)}), 502
 
 
 # ---------- Pages ----------
