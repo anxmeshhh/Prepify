@@ -577,13 +577,7 @@ function wireJdTab(k, d) {
 // ---------- small pieces used by the results pages ----------
 function jdBanner(d) {
   const jd = jdNow();
-  if (!jd) {
-    return `<div class="jd-banner empty-jd">
-      <div><b>Got the job description?</b> Add it to see the skills it asks for, the rounds you'll probably face,
-        a prep plan, and which of these questions match it.</div>
-      <button class="btn small" data-jd-add>Add job description</button>
-    </div>`;
-  }
+  if (!jd) return '';            // the offer to add one is in the side panel
   const a = jd.analysis;
   const qs = pulledQuestions(d);
   const matched = qs.filter(q => jdSkillsIn(q.text).length).length;

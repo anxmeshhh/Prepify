@@ -819,13 +819,14 @@ function renderGuest(d) {
   const name = companyName(d);
   const links = [...Object.entries(SITES).filter(([, x]) => x.url(name)), ['Google', GOOGLE]];
   $('#report').innerHTML = `
-    <div class="notice guest compact">
-      <p><b>Guest mode shows links only.</b> Sign in with Google to pull experiences, questions and answers
-        into Prepify. Pulled data stays in this tab; nothing is stored on a server.</p>
-      <button class="btn primary small" data-signin>Sign in with Google</button>
-    </div>
+    <header class="dash-head">
+      <div class="dash-title">
+        <h2>${esc(name)}</h2>
+        <p>Guest mode shows a link to each source. Sign in to pull the questions and experiences into Prepify.</p>
+      </div>
+      <div class="dash-actions"><button class="btn primary" data-signin>Sign in with Google</button></div>
+    </header>
     ${jdBanner(d)}
-    <div class="sources-head"><span>Sources for <b>${esc(name)}</b></span><span class="hint">Each opens in a new tab</span></div>
     <div class="link-grid">${links.map(([label, s]) => `
       <a class="link-row" href="${s.url(name)}" target="_blank" rel="noopener noreferrer" aria-label="${esc(label)}: ${esc(name)} (opens in a new tab)">
         <span class="mark" style="--c:${s.color}">${esc(s.mark)}</span>
@@ -834,17 +835,7 @@ function renderGuest(d) {
       </a>`).join('')}
     </div>`;
   $$('#report [data-signin]').forEach(b => b.onclick = openSignin);
-  $('#panel').innerHTML = `
-    <div class="panel">
-      <h3>${esc(name)}</h3>
-      <div class="kind">Company</div>
-      <div class="row"><span>Mode</span><span class="off">Guest · links only</span></div>
-      <button class="btn" data-signin>Sign in to pull sources</button>
-      <p class="note">When you're signed in, Prepify reads Glassdoor and AmbitionBox in the background with your own Chrome and shows everything here.</p>
-      ${aiPanelHtml()}
-      ${jdPanelHtml()}
-    </div>`;
-  $$('#panel [data-signin]').forEach(b => b.onclick = openSignin);
+  $('#panel').innerHTML = `<div class="panel">${jdPanelHtml()}${aiPanelHtml()}</div>`;
   wireAiPanel();
   wireJdPanel(d);
 }
@@ -911,71 +902,49 @@ const STATUS_TEXT = {
   cancelled: 'Cancelled. Click to retry.'
 };
 
+const STATUS_SHORT = {
+  working: 'Reading…', login: 'Sign-in needed', 'needs-url': 'Add the careers page link', blocked: 'Verification needed',
+  'not-found': 'No results · try again', empty: 'No results · try again', timeout: 'Timed out · try again',
+  error: 'Failed · try again', cancelled: 'Cancelled · try again'
+};
+
+// A source as one tile: the name and one line (counts, or what's happening). Pulled ones link to their page.
 function sourceCard(g, company) {
   const s = siteInfo(g.name);
   const has = hasData(g);
   const pull = pulls[pullKey(company, g.name)];
   const busy = pull && pull.status === 'working';
-  const stepText = busy && pull.step && pull.step !== 'starting' ? pull.step.charAt(0).toUpperCase() + pull.step.slice(1) + '…' : null;
-  // "nothing found" is a normal outcome, not an error: say so plainly
-  const noneText = (pull && (pull.status === 'not-found' || pull.status === 'empty'))
-    ? `No interview results on ${g.name} for ${company}. Click to try again.` : null;
-  const statusLine = pull && STATUS_TEXT[pull.status]
-    ? `<div class="sc-status ${noneText ? 'none' : pull.status}">${busy ? '<span class="spinner"></span>' : ''}${esc(stepText || noneText || STATUS_TEXT[pull.status])}</div>`
-    : (pull && pull.status === 'done' && !pull.added ? '<div class="sc-status done">Up to date</div>' : '');
-  const detailLine = pull && pull.detail && !busy && pull.status !== 'done'
-    ? `<div class="sc-detail" title="${esc(pull.detail)}">Stopped at: ${esc(pull.detail)}</div>` : '';
-  const firstQ = g.questions[0] || (g.experiences[0] && (g.experiences[0].questions || [])[0]);
-  const preview = firstQ ? `<div class="sc-preview">“${esc(firstQ.text)}”</div>` : '';
-  const open = has && !busy;           // a pulled source is a link to its own page
+  const step = busy && pull.step && pull.step !== 'starting' ? sentence(pull.step) + '…' : null;
+  const counts = g.official.length ? plural(g.official.length, 'official page')
+    : [g.questions.length && plural(g.questions.length, 'question'), g.experiences.length && plural(g.experiences.length, 'experience')]
+      .filter(Boolean).join(' · ') || (g.reviews.length ? plural(g.reviews.length, 'review') : '');
+  const status = busy ? (step || STATUS_SHORT.working) : (pull && !has ? STATUS_SHORT[pull.status] : null);
+  const kind = busy ? 'busy' : status ? (pull.status === 'not-found' || pull.status === 'empty' ? 'none' : 'warn') : '';
+  const open = has && !busy;
   const tag = open ? 'a' : 'button';
   const attrs = open ? `href="${urlFor(lastData.query, g.name)}" data-nav` : `type="button" data-src="${esc(g.name)}"`;
-  return `
-    <${tag} class="source-card ${has ? '' : 'empty-card'} ${busy ? 'busy' : ''}" ${attrs}>
-      <div class="sc-head">
-        <span class="mark" style="--c:${s.color}">${esc(s.mark)}</span>
-        <span class="sc-name">${esc(g.name)}</span>
-        <span class="sc-arrow">${busy ? '' : has ? '→' : '+'}</span>
-      </div>
-      ${s.host ? `<div class="sc-host">${esc(s.host)}</div>` : ''}
-      ${has && g.official.length ? `
-        <div class="sc-stats">
-          <span><b>${g.official.length}</b> ${g.official.length === 1 ? 'page' : 'pages'}</span>
-          <span><b>${g.official.reduce((n, p) => n + (p.sections || []).length, 0)}</b> sections</span>
-        </div>
-        <div class="sc-preview">${esc(((g.official[0].sections || [])[0] || {}).heading || g.official[0].title || '')}</div>
-        ${statusLine}
-        <div class="sc-foot">Pulled ${fmtDate(g.newest)} · official</div>`
-      : has ? `
-        <div class="sc-stats">
-          <span><b>${g.experiences.length}</b> ${g.experiences.length === 1 ? 'experience' : 'experiences'}</span>
-          <span><b>${g.questions.length}</b> ${g.questions.length === 1 ? 'question' : 'questions'}</span>
-          <span><b>${g.answers}</b> ${g.answers === 1 ? 'answer' : 'answers'}</span>
-          <span><b>${g.reviews.length}</b> ${g.reviews.length === 1 ? 'review' : 'reviews'}</span>
-        </div>
-        ${preview}
-        ${statusLine}
-        <div class="sc-foot">Pulled ${fmtDate(g.newest)} · ${plural(g.pages.size, 'page')}</div>`
-      : `
-        <div class="sc-stats muted">Nothing pulled yet</div>
-        ${statusLine}${detailLine}
-        <div class="sc-foot">${SITES[g.name] && !statusLine ? `Click to pull from ${esc(g.name)}` : ''}</div>`}
+  const tip = pull && !busy && pull.status !== 'done' ? ` title="${esc([STATUS_TEXT[pull.status], pull.detail].filter(Boolean).join(' '))}"` : '';
+  return `<${tag} class="src-tile ${kind}" ${attrs}${tip}>
+      <span class="mark" style="--c:${s.color}">${esc(s.mark)}</span>
+      <span class="st-text"><b>${esc(g.name)}</b>
+        <span class="st-sub">${busy ? '<span class="spinner"></span>' : ''}${esc(status || counts || 'Nothing found')}</span></span>
+      <span class="st-arrow" aria-hidden="true">${busy ? '' : has ? '→' : '↻'}</span>
     </${tag}>`;
 }
 
-// Pulled sources (and ones being pulled) as boxes; the rest as one compact row to pull from.
+// Pulled sources as tiles; the rest as one row of chips to pull from.
 function sourcesHtml(groups, name) {
-  const boxed = (g) => hasData(g) || pulls[pullKey(name, g.name)];
-  const cards = groups.filter(boxed);
-  const rest = groups.filter(g => !boxed(g));
+  const tiled = (g) => hasData(g) || pulls[pullKey(name, g.name)];
+  const tiles = groups.filter(tiled);
+  const rest = groups.filter(g => !tiled(g));
   const linkOnly = Object.entries(SITES).filter(([, s]) => s.linkOnly);
   const chip = (g) => { const s = siteInfo(g.name); return `
     <button class="src-chip" type="button" data-src="${esc(g.name)}" title="Pull ${esc(g.name)} into Prepify">
       <span class="mark tiny" style="--c:${s.color}">${esc(s.mark)}</span>${esc(g.name)}<span class="plus" aria-hidden="true">+</span>
     </button>`; };
-  return `${cards.length ? `<div class="source-grid">${cards.map(g => sourceCard(g, name)).join('')}</div>` : ''}
+  return `<div class="src-grid">${tiles.map(g => sourceCard(g, name)).join('')}</div>
     <div class="source-more">
-      ${rest.length ? `<span class="source-more-label">${cards.length ? 'Not pulled yet' : 'Pull one source'}</span>${rest.map(chip).join('')}` : ''}
+      ${rest.length ? `<span class="source-more-label">${tiles.length ? 'More sources' : 'Sources'}</span>${rest.map(chip).join('')}` : ''}
       ${linkOnly.map(([label, s]) => `
         <a class="src-chip link" href="${s.url(name)}" target="_blank" rel="noopener noreferrer" title="${esc(label)} allows links only; opens in a new tab">
           <span class="mark tiny" style="--c:${s.color}">${esc(s.mark)}</span>${esc(label)}<span class="plus" aria-hidden="true">↗</span>
@@ -1009,31 +978,31 @@ function render(d, src = null) {
 // kept for old links
 function renderSource(d, src) { render(d, src); }
 
-// ----- dashboard: the source boxes, plus what stands out across sources -----
+// ----- dashboard: a header with the main actions, the sources, then what stands out across them -----
 function renderDashboard(d, groups) {
   const name = companyName(d);
   const withData = groups.filter(hasData);
   const anything = withData.length > 0;
-  let html = `${jdBanner(d)}${aiStripHtml(d)}<div class="sources-head">
-      <span>Results from <b>${withData.length}</b> of ${groups.length} sources <span class="hint">· Click a box to open its page</span></span>
-      ${anything ? '<button class="btn small" data-pdf="">Download PDF</button>' : ''}
-    </div>
-    <div id="sources">${sourcesHtml(groups, name)}</div>`;
-
-  if (!anything) {
-    html += `<div class="empty" style="margin-top:24px;">
-      <h3>Nothing pulled for ${esc(name)} yet</h3>
-      Click a box to pull that site into Prepify, or pull everything at once. Prepify reads the pages
-      in the background using your own signed-in Chrome, so you stay on this page.
-      <div><button class="btn primary" id="empty-research">Pull all sources for ${esc(name)}</button></div>
-    </div>`;
-    $('#report').innerHTML = html;
-    $('#empty-research').onclick = () => pullSources(name);
-  } else {
-    html += glance(d, withData);
-    $('#report').innerHTML = html;
-    wireBrief(d);
-  }
+  const nq = pulledQuestions(d).length;
+  const nx = (d.experiences || []).length;
+  let html = `
+    <header class="dash-head">
+      <div class="dash-title">
+        <h2>${esc(name)}</h2>
+        <p>${anything ? `${plural(nq, 'question')} · ${plural(nx, 'experience')} · from ${plural(withData.length, 'source')}. Open a source to read everything it has.`
+          : 'Nothing pulled yet. Pull the sources and their questions and experiences appear here.'}</p>
+      </div>
+      <div class="dash-actions">
+        <button class="btn ${anything ? '' : 'primary'}" data-pull-all>Pull all sources</button>
+        ${anything ? '<button class="btn primary" data-pdf="">Download PDF</button>' : ''}
+      </div>
+    </header>
+    <div id="sources">${sourcesHtml(groups, name)}</div>
+    ${jdBanner(d)}${aiStripHtml(d)}`;
+  if (anything) html += glance(d, withData);
+  $('#report').innerHTML = html;
+  $$('[data-pull-all]').forEach(b => b.onclick = () => pullSources(name));
+  wireBrief(d);
   wireCards(name);
   wireJdBanner(d);
   wireAiStrip();
@@ -1080,20 +1049,6 @@ function glance(d, withData) {
         ${focus.qs.length ? `<ol class="repeat-list">${focus.qs.slice(0, 15).map(q => `<li><span>${esc(q.text)}</span><small>${[...q.sources].map(esc).join(' + ')}</small></li>`).join('')}</ol>` : ''}
       </section>`;
   }
-  html += `<section class="section">
-      <h2>At a glance</h2>
-      <div class="glance-grid">
-        ${withData.map(g => `
-          <a class="glance-card" href="${urlFor(d.query, g.name)}" data-nav>
-            <span class="mark" style="--c:${siteInfo(g.name).color}">${esc(siteInfo(g.name).mark)}</span>
-            <span class="glance-name">${esc(g.name)}</span>
-            <span class="glance-nums">${g.official.length
-              ? `${plural(g.official.length, 'official page')} · ${plural(g.official.reduce((n, pg) => n + (pg.sections || []).length, 0), 'section')}`
-              : `${plural(g.experiences.length, 'experience')} · ${plural(g.questions.length, 'question')}${g.reviews.length ? ' · ' + plural(g.reviews.length, 'review') : ''}`}</span>
-            <span class="glance-open">Open page →</span>
-          </a>`).join('')}
-      </div>
-    </section>`;
   if (Object.keys(subjects).length) {
     html += `<section class="section">
         <h2>Subjects asked</h2>
@@ -1440,30 +1395,19 @@ function reviewHtml(r) {
 
 // ---------- side panel (signed in) ----------
 function renderPanel(name, d) {
-  const ratings = d.reviews.map(r => r.rating).filter(Boolean);
-  const avg = ratings.length ? (ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(1) + ' / 5' : '–';
-  const unique = pulledQuestions(d).length;       // Q&A lists and questions inside experiences, once each
-  const anything = d.questions.length || d.reviews.length || d.experiences.length;
   $('#panel').innerHTML = `
     <div class="panel">
-      <h3>${esc(name)}</h3>
-      <div class="kind">Company</div>
-      <div class="row"><span>Experiences</span><span>${(d.experiences || []).length}</span></div>
-      <div class="row"><span>Questions</span><span>${unique}</span></div>
-      <div class="row"><span>Reviews</span><span>${d.reviews.length}</span></div>
-      <div class="row"><span>Average rating</span><span>${avg}</span></div>
-      <div class="row"><span>Extension</span><span class="${hasExtension() ? 'ok' : 'off'}">${hasExtension() ? 'Connected' : 'Not detected'}</span></div>
-      <button class="btn" id="panel-research">Pull all sources</button>
-      ${anything ? '<button class="btn primary" data-pdf>Download PDF</button>' : ''}
+      ${jdPanelHtml()}
+      ${aiPanelHtml()}
+      <div class="panel-sep"></div>
+      <h3>This session</h3>
+      ${hasExtension() ? '' : '<p class="note warn">The Prepify Capture extension isn\'t connected, so sources can\'t be pulled.</p>'}
       <button class="linkbtn" id="panel-check">Run source check</button>
       <button class="linkbtn danger" id="panel-clear">Clear this session's data</button>
       <p class="note">Pulled data lives only in this browser tab. Closing the tab or signing out erases it.</p>
-      ${aiPanelHtml()}
-      ${jdPanelHtml()}
     </div>`;
   wireAiPanel();
   wireJdPanel(d);
-  $('#panel-research').onclick = () => pullSources(name);
   $('#panel-check').onclick = () => runSourceCheck(name);
   confirmClick($('#panel-clear'), () => { clearStore(); Object.keys(pulls).forEach(k => delete pulls[k]); rerender(); });
 }

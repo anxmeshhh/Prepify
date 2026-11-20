@@ -1174,3 +1174,67 @@ a.btn:hover { text-decoration: none; }
   .section { margin-bottom: var(--space-12); }
   .more-btn, .ai-answer-btn { margin-left: 0; }
 }
+
+
+/* =================================================================================================
+   Simple and consistent: wider page, one header, one tile size, fewer boxes
+   ================================================================================================= */
+:root { --page: 1360px; --gutter: clamp(16px, 3vw, 40px); }
+.layout { padding: var(--space-6) var(--gutter) 80px; gap: var(--space-8); }
+@media (min-width: 1025px) { .layout:not(.wide) { grid-template-columns: minmax(0, 1fr) 300px; } }
+.understood { margin-bottom: var(--space-5); }
+.section { margin-bottom: var(--space-10); }
+
+/* the header at the top of results */
+.dash-head {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-4) var(--space-6);
+  padding: var(--card-pad); margin-bottom: var(--space-4);
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.dash-title { flex: 1 1 320px; min-width: 0; }
+.dash-title h2 { font-size: 22px; font-weight: 700; line-height: 1.25; }
+.dash-title p { color: var(--muted); font-size: 13px; margin-top: var(--space-1); }
+.dash-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+
+/* sources: every tile the same size, one line of detail */
+.src-grid, .link-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-3); }
+.src-grid { margin-bottom: var(--space-3); }
+.src-grid:empty { display: none; }
+.link-grid { margin-bottom: var(--space-8); }
+.src-tile, .link-row {
+  display: flex; align-items: center; gap: var(--space-3); height: 64px; padding: 0 var(--space-4); min-width: 0;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); font: inherit; text-align: left; cursor: pointer;
+  transition: border-color .15s, background-color .15s;
+}
+.src-tile:hover, .link-row:hover { border-color: var(--accent); background: var(--element); }
+.st-text { display: flex; flex-direction: column; flex: 1; min-width: 0; line-height: 1.35; }
+.st-text b { font-size: 14px; }
+.st-sub { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-arrow { color: var(--muted); }
+.src-tile:hover .st-arrow { color: var(--accent); }
+.src-tile.busy { border-color: var(--accent); cursor: progress; }
+.src-tile.busy .st-sub { color: var(--accent); }
+.src-tile.warn { border-color: rgba(245, 167, 66, 0.5); }
+.src-tile.warn .st-sub { color: var(--warn); }
+.src-tile.none .st-sub { color: var(--faint); }
+.source-more { margin: 0 0 var(--space-6); }
+
+/* side panel: sections separated the same way, no leading line */
+.panel > .panel-sep:first-child { display: none; }
+.panel h3 { font-size: 15px; }
+.note.warn { color: var(--warn); }
+
+@media (max-width: 640px) {
+  .dash-title h2 { font-size: 19px; }
+  .dash-actions { width: 100%; }
+  .dash-actions .btn { flex: 1; }
+}
+/* tiles: two lines of detail at most, all the same height */
+.src-tile, .link-row { height: 72px; }
+.st-sub { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.src-tile.busy .st-sub { display: flex; white-space: nowrap; }
+/* labels that only show information are not boxed like buttons */
+.chips.static { flex-wrap: wrap; overflow: visible; }
+.chips.static .chip-btn { border-color: transparent; background: var(--element); color: var(--muted); cursor: default; height: 30px; }
+.chips.static .chip-btn:hover { border-color: transparent; color: var(--muted); }
