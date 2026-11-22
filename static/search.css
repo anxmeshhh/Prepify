@@ -1266,3 +1266,7 @@ a.btn:hover { text-decoration: none; }
 .welcome-box .field input { font: inherit; font-size: 14px; color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 10px 12px; }
 .welcome-box .field input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
 .welcome-box .login-steps a { color: var(--link); }
+
+/* a section title with its actions on the same line (the brief's download button) */
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.section-head h2 { margin: 0; }

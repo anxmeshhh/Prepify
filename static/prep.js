@@ -101,7 +101,10 @@ function briefHtml(d) {
   }).join('');
   const stale = counts.x !== b.counts.x || counts.q !== b.counts.q;
   return `<section class="section brief" id="brief">
-    <h2>Company brief <span class="tag ai">AI</span></h2>
+    <div class="section-head">
+      <h2>Company brief <span class="tag ai">AI</span></h2>
+      <button class="btn small" type="button" data-pdf="BRIEF">Download brief PDF</button>
+    </div>
     ${a.overview ? `<p class="brief-overview">${esc(a.overview)}</p>` : ''}
     <div class="brief-grid">
       ${a.process.length ? `<div class="jd-card"><h3>How the process usually goes</h3>
@@ -115,6 +118,11 @@ function briefHtml(d) {
       ${plural(a.based_on.experiences, 'experience')} and ${plural(a.based_on.questions, 'question')}. Click a source code to open it.
       ${stale ? `<span class="brief-stale">New data has been pulled since.</span> ${aiActionButton('data-brief-make', 'Update the brief', AI_COST.brief, 'linkbtn accent')}` : ''}</p>
   </section>`;
+}
+
+function hasBrief() {
+  const c = aiEntry();
+  return !!(c && c.ai && c.ai.brief);
 }
 
 function wireBrief(d) {
@@ -139,35 +147,6 @@ function wireBrief(d) {
     const r = c && c.ai.brief && c.ai.brief.refs[b.dataset.cite];
     if (r && r.src) openSource(r.src, r.tab);
   });
-}
-
-function writeBriefPdf(api) {
-  const c = aiEntry();
-  const b = c && c.ai && c.ai.brief;
-  if (!b) return;
-  const { write, rule, ensure, accent, muted } = api;
-  const a = b.data;
-  const srcs = (ids) => (ids || []).length ? ` [${ids.join(', ')}]` : '';
-  write('Company brief (written by AI from the pulled experiences)', { size: 16, bold: true, color: accent, after: 6 });
-  if (a.overview) write(a.overview, { after: 6 });
-  if (a.process.length) {
-    write('How the process usually goes', { size: 12, bold: true, after: 3 });
-    a.process.forEach((p, i) => write(`${i + 1}. ${p.step}: ${p.detail}${srcs(p.sources)}`, { indent: 8, after: 2 }));
-  }
-  if (a.focus.length) {
-    ensure(30);
-    write('What they ask most', { size: 12, bold: true, after: 3 });
-    a.focus.forEach(p => write(`- ${p.topic}: ${p.detail}${srcs(p.sources)}`, { indent: 8, after: 2 }));
-  }
-  if (a.tips.length) {
-    ensure(30);
-    write('Tips from candidates', { size: 12, bold: true, after: 3 });
-    a.tips.forEach(p => write(`- ${p.tip}${srcs(p.sources)}`, { indent: 8, after: 2 }));
-  }
-  write('Sources: ' + Object.entries(b.refs).filter(([id]) => JSON.stringify(a).includes(`"${id}"`))
-    .map(([id, r]) => `[${id}] ${r.label}`).join('; '), { size: 8, color: muted, after: 4 });
-  if (a.caveat) write(a.caveat, { size: 9, color: muted, italic: true, after: 6 });
-  rule();
 }
 
 // =====================================================================================================
@@ -430,18 +409,3 @@ function wireSchedule(d) {
   confirmClick(clear, () => { delete jdNow().schedule; saveStore(); renderJdPage(d); });
 }
 
-function writeSchedulePdf(api, d) {
-  const sch = buildSchedule(d);
-  if (!sch || !sch.days.length) return;
-  const { write, ensure, accent, muted } = api;
-  const jd = jdNow();
-  ensure(40);
-  write(`Schedule up to the interview (${jd.schedule.date}, ${sch.hours} h a day)`, { size: 13, bold: true, after: 4 });
-  sch.days.forEach(p => {
-    ensure(24);
-    write(p.date.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' }), { bold: true, color: accent, indent: 6, after: 1 });
-    if (!p.tasks.length) write('Rest or revise', { size: 9, color: muted, indent: 18, after: 2 });
-    p.tasks.forEach(t => write(`${jd.done[t.key] ? '[x]' : '[ ]'} ${t.text}`, { size: 9, indent: 18, after: 1 }));
-  });
-  write('', { after: 4 });
-}
