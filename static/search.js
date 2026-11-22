@@ -359,7 +359,7 @@ function renderAuth() {
   $$('[data-signin]').forEach(b => b.onclick = openSignin);
   $$('[data-signout]').forEach(b => b.onclick = signOut);
   $('#mode-line').innerHTML = auth.user
-    ? `Signed in as <b>${esc(auth.user.name)}</b>. Pulled data stays in this tab only and is gone when you close it.`
+    ? `<span>Signed in as <b>${esc(auth.user.name)}</b>. Pulled data stays in this tab only and is gone when you close it.</span>`
     : `<span>Guest mode shows links only. Sign in with Google to pull questions, answers and experiences into Prepify.</span>
        <button class="linkbtn accent" data-signin>Sign in with Google</button>`;
   $$('#mode-line [data-signin]').forEach(b => b.onclick = openSignin);
@@ -1498,6 +1498,13 @@ function roundTag(q) {
   return `<span class="tag">${esc(/round$/i.test(r) ? r : r + ' round')}</span>`;
 }
 
+// The actions under a question, in one row: write a model answer (when the site had none) and practise it.
+function qaActions(q, site, unanswered) {
+  const write = unanswered && !aiAnswerFor(q) ? aiAnswerBlock(q, site) : '';
+  const practise = practiseButton(q);
+  return write || practise ? `<div class="qa-actions">${write}${practise}</div>` : '';
+}
+
 function qaCard(q, i, site, alsoOn) {
   const answers = q.answers || [];
   const first = answers[0];
@@ -1518,9 +1525,9 @@ function qaCard(q, i, site, alsoOn) {
              <div class="more-answers hidden">${rest.map((a, j) =>
                `<div class="answer"><div class="a-label">Answer ${j + 2}</div>${richText(a)}</div>`).join('')}</div>
              <button class="linkbtn more-btn">Show ${plural(rest.length, 'more answer')}</button>` : ''}`
-        : `<div class="answer none">No answer shown on ${esc(site)}</div>${aiAnswerBlock(q, site)}`}
+        : `<div class="answer none">No answer shown on ${esc(site)}</div>${aiAnswerFor(q) ? aiAnswerBlock(q, site) : ''}`}
+      ${qaActions(q, site, !first)}
       ${practiceLinks(q)}
-      ${practiseButton(q)}
     </article>`;
 }
 

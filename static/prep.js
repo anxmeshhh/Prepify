@@ -20,7 +20,7 @@ function aiEntry() {
 }
 
 // The button for an AI action: runs it when AI assist is on, otherwise offers to turn AI assist on.
-function aiActionButton(attr, label, cost, cls = 'btn small') {
+function aiActionButton(attr, label, cost, cls = 'btn') {
   if (!signedIn() || !aiAvailable() || aiPref() === 'off') return '';     // turned off on purpose: no offers
   if (!aiOn()) return `<button class="${cls}" type="button" data-ai-turn-on>Turn on AI assist to ${label.charAt(0).toLowerCase() + label.slice(1)}</button>`;
   const left = auth.ai && auth.ai.tokens && auth.ai.tokens.user_left;
@@ -174,7 +174,7 @@ function aiAnswerBlock(q, site) {
   const a = aiAnswerFor(q);
   if (a) return aiAnswerHtml(a, site);
   return aiActionButton(`data-ai-answer="${esc(qKey(q))}" data-q="${esc(q.text)}"`, 'Write a model answer',
-                        AI_COST.answerBase + AI_COST.answer, 'linkbtn accent ai-answer-btn');
+                        AI_COST.answerBase + AI_COST.answer, 'linkbtn accent');
 }
 
 // "Write answers for the unanswered ones", five at a time.

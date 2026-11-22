@@ -17,7 +17,7 @@ const practiceReady = () => signedIn() && aiAvailable() && aiPref() !== 'off';
 
 function practiseButton(q) {
   if (!practiceReady()) return '';
-  return `<button class="linkbtn accent practise-btn" type="button" data-practise="${esc(qKey(q))}" data-q="${esc(q.text)}">Practise answering</button>`;
+  return `<button class="linkbtn accent" type="button" data-practise="${esc(qKey(q))}" data-q="${esc(q.text)}">Practise answering</button>`;
 }
 
 function findPulled(key, text) {
@@ -192,7 +192,7 @@ function mockSummaryHtml(mk) {
       <div><b>${count('Good')}</b><span>good</span></div>
       <div><b>${count('Needs work')}</b><span>need work</span></div>
     </div>
-    <p class="sub">${plural(n, 'answer')} judged of ${mk.asked} asked.${weak.length ? ' Practise these again:' : ' Every answer was strong.'}</p>
+    <p class="sub">You answered ${n} of ${mk.asked} questions.${weak.length ? ' Practise these again:' : ' Every answer was strong.'}</p>
     ${weak.length ? `<ul class="mock-weak">${weak.map(r => `<li><span class="verdict small ${VERDICT_CLASS[r.verdict]}">${r.score}/10</span>
       <span>${esc(r.q)}</span><button class="linkbtn accent" type="button" data-practise="${esc(r.key)}" data-q="${esc(r.q)}">Practise again</button></li>`).join('')}</ul>` : ''}
   </div>`;
@@ -203,12 +203,12 @@ function practiceHtml(d) {
   if (!c || !practiceReady()) return '';
   const n = pulledQuestions(d).length;
   if (n < 2) return '';
-  return `<section class="section practice" id="practice">
+  return `<section class="section practise-section" id="practice">
     <h2>Practise</h2>
     <p class="sub">Answer questions pulled for ${esc(companyName(d))} and get feedback the way the interviewer would give it: what worked, what to fix and a stronger answer.
       Every question card also has <b>Practise answering</b>.</p>
     <div class="practice-actions">
-      ${aiActionButton('data-mock-start', `Start a mock interview (${Math.min(MOCK_SIZE, n)} questions)`, AI_COST.feedback * Math.min(MOCK_SIZE, n), 'btn primary')}
+      ${aiActionButton('data-mock-start', `Start a mock interview (${Math.min(MOCK_SIZE, n)} questions)`, AI_COST.feedback * Math.min(MOCK_SIZE, n))}
     </div>
     ${c.ai.mock ? mockSummaryHtml(c.ai.mock) : ''}
   </section>`;
