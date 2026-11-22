@@ -77,6 +77,59 @@ def _limited(bucket, per, seconds):
 def healthz():
     return jsonify({'ok': True})
 
+
+# ---------- first run on the person's own PC: who they are, and their own Groq key (setup_local.py) ----------
+import setup_local  # noqa: E402
+
+PROFILE_FILE = os.path.join(HOME_DIR, '.prepify-profile.json')
+ENV_FILE = os.path.join(HOME_DIR, '.env')
+if not PUBLIC_URL:
+    setup_local.sync_in_background(PROFILE_FILE)      # details saved while offline go to Supabase now
+
+
+def _local_only():
+    """Setup writes to this PC (the .env, the profile file), so it's only for a copy running on the user's own machine."""
+    if PUBLIC_URL:
+        return jsonify({'error': 'Setup is only available when Prepify runs on your own computer.'}), 403
+    return None
+
+
+@app.route('/api/setup', methods=['GET'])
+def setup_status():
+    profile = setup_local.load_profile(PROFILE_FILE)
+    return jsonify({'local': not PUBLIC_URL, 'registered': bool(profile) or bool(PUBLIC_URL),
+                    'name': profile and profile.get('name'), 'synced': bool(profile and profile.get('synced')),
+                    'groq_key': ai.available(), 'version': setup_local.APP_VERSION})
+
+
+@app.route('/api/setup/profile', methods=['POST'])
+def setup_profile():
+    refused = _local_only()
+    if refused:
+        return refused
+    b = request.get_json(silent=True) or {}
+    try:
+        setup_local.save_profile(PROFILE_FILE, b.get('name'), b.get('email'))
+    except setup_local.SetupError as e:
+        return jsonify({'error': str(e)}), 400
+    synced = setup_local.sync_profile(PROFILE_FILE)     # if offline, it's retried at the next start
+    return jsonify({'ok': True, 'synced': synced})
+
+
+@app.route('/api/setup/groq', methods=['POST'])
+def setup_groq():
+    refused = _local_only()
+    if refused:
+        return refused
+    try:
+        key = setup_local.check_groq_key((request.get_json(silent=True) or {}).get('key'))
+        setup_local.set_env_value(ENV_FILE, 'GROQ_API_KEY', key)
+    except setup_local.SetupError as e:
+        return jsonify({'error': str(e)}), 400
+    except OSError:
+        return jsonify({'error': "The key works, but Prepify couldn't save it next to the app. Check that its folder isn't read-only."}), 500
+    return jsonify({'ok': True, 'ai': ai.status(current_user())})
+
 # Prepify's own Google sign-in client. A client ID is public (it's sent to every browser), so it's built in:
 # people who run Prepify can sign in without setting anything up. GOOGLE_CLIENT_ID in .env overrides it.
 # It only works on the origins registered for it in Google Cloud Console: http://localhost:5000.

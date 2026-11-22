@@ -113,11 +113,12 @@ function aiTurnOff() {
 // ---------- side panel ----------
 function aiPanelHtml() {
   if (!aiAvailable()) {
-    return signedIn() ? `
+    return `
       <div class="panel-sep"></div>
       <h3>AI assist</h3>
-      <div class="row"><span>Status</span><span class="off">Not set up</span></div>
-      <p class="note">Add GROQ_API_KEY to the server's .env file and restart Prepify to use AI assist.</p>` : '';
+      <div class="row"><span>Status</span><span class="off">No API key yet</span></div>
+      <p class="note">AI features run on your own free Groq key.</p>
+      <button class="btn" type="button" data-add-groq>Add your Groq key</button>`;
   }
   if (!signedIn()) {
     return `
@@ -139,6 +140,7 @@ function aiPanelHtml() {
 }
 
 function wireAiPanel() {
+  $$('[data-add-groq]').forEach(b => b.onclick = () => openGroqKey(false));
   $$('[data-ai-toggle]').forEach(b => b.onclick = () => aiOn() ? aiTurnOff() : openAiConsent());
 }
 

@@ -21,3 +21,6 @@ build/
 dist/
 .prepify-usage.json
 .prepify-usage.json.tmp
+.prepify-profile.json
+*.json.tmp
+.env.tmp
