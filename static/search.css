@@ -1371,3 +1371,63 @@ a.btn:hover { text-decoration: none; }
   .home-inner > * { animation: none; }
   .home .btn:hover, .example:hover { transform: none; }
 }
+
+/* =================================================================================================
+   An interactive wordmark (home and top bar) and the same calm motion inside the app
+   ================================================================================================= */
+/* letters rise and warm up in a small wave around the pointer */
+.wordmark .ch { display: inline-block; transition: transform .3s cubic-bezier(.2, .8, .2, 1), color .2s ease; }
+.wordmark .ch:hover { transform: translateY(-.12em); color: var(--accent); }
+.wordmark .ch:hover + .ch, .wordmark .ch:has(+ .ch:hover) { transform: translateY(-.05em); }
+.home .wordmark { cursor: pointer; }
+/* the glow behind the home wordmark leans gently towards the pointer */
+.home::after { margin-left: var(--gx, 0px); margin-top: var(--gy, 0px); transition: margin .6s ease-out; }
+
+/* top bar: the same wordmark, with a still cursor that blinks while pointed at */
+.topbar .wordmark::after {
+  content: ''; display: inline-block; width: .28em; height: .6em; margin-left: .1em; vertical-align: .02em;
+  background: var(--accent); opacity: .85; border-radius: 1px;
+}
+.topbar .wordmark:hover::after { animation: home-cursor 1.15s steps(1, end) infinite; }
+
+/* results arrive with the same rise as the home page, only when you search or open a source */
+.results.entering #report > *, .results.entering .glance > *, .results.entering #panel {
+  animation: home-rise .5s cubic-bezier(.2, .7, .2, 1) both;
+}
+.results.entering #report > :nth-child(2), .results.entering .glance > :nth-child(1) { animation-delay: .05s; }
+.results.entering #report > :nth-child(3), .results.entering .glance > :nth-child(2) { animation-delay: .1s; }
+.results.entering #report > :nth-child(4), .results.entering .glance > :nth-child(3) { animation-delay: .15s; }
+.results.entering #report > :nth-child(5), .results.entering .glance > :nth-child(4) { animation-delay: .2s; }
+.results.entering #report > :nth-child(n+6), .results.entering .glance > :nth-child(n+5) { animation-delay: .25s; }
+.results.entering #panel { animation-delay: .12s; }
+/* a tab's content fades in when you switch to it */
+#tab-body.tab-enter > * { animation: home-rise .3s ease both; }
+/* a faint warm light at the top of the results, like the home page */
+.results { position: relative; isolation: isolate; }
+.results::before {
+  content: ''; position: absolute; left: 50%; top: 0; width: min(1100px, 100vw); height: 360px; transform: translateX(-50%);
+  background: radial-gradient(closest-side, rgba(250, 178, 131, 0.05), transparent); pointer-events: none; z-index: -1;
+}
+
+/* dialogs ease in */
+.modal { animation: modal-fade .18s ease both; }
+.modal > .modal-box, .modal > form.modal-box { animation: modal-pop .24s cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes modal-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-pop { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
+
+/* the same small hover feedback everywhere */
+.btn, .src-tile, .link-row, .src-chip, .chip-btn, .tab {
+  transition: transform .15s ease, border-color .15s ease, background-color .15s ease, color .15s ease, filter .15s ease;
+}
+.btn:not(:disabled):hover, .src-chip:hover, .chip-btn:hover { transform: translateY(-1px); }
+.src-tile:hover, .link-row:hover { transform: translateY(-2px); }
+.btn:not(:disabled):active, .src-tile:active, .src-chip:active { transform: translateY(0); }
+
+@media (prefers-reduced-motion: reduce) {
+  .wordmark .ch, .wordmark .ch:hover, .wordmark .ch:hover + .ch, .wordmark .ch:has(+ .ch:hover) { transform: none; transition: none; }
+  .topbar .wordmark:hover::after { animation: none; }
+  .results.entering #report > *, .results.entering .glance > *, .results.entering #panel, #tab-body.tab-enter > * { animation: none; }
+  .modal, .modal > .modal-box, .modal > form.modal-box { animation: none; }
+  .btn:not(:disabled):hover, .src-chip:hover, .chip-btn:hover, .src-tile:hover, .link-row:hover { transform: none; }
+  .home::after { margin: 0; }
+}

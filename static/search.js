@@ -809,8 +809,77 @@ function go(q, push = true, src = null, tab = null) {
   q = q.trim();
   if (!q) return;
   if (push) history.pushState({ q, src, tab }, '', urlFor(q, src, tab));
-  return runSearch(q, src);
+  const run = runSearch(q, src);
+  Promise.resolve(run).finally(playEnter);       // the new page rises into place, once
+  return run;
 }
+
+// ---------- motion: the wordmark and page arrivals (see the end of search.css) ----------
+const lessMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Results rise into place when you search or open a source; later updates (pulls arriving) don't move.
+let enterTimer = null;
+function playEnter() {
+  const r = $('#results');
+  if (!r || r.classList.contains('hidden') || lessMotion()) return;
+  r.classList.remove('entering');
+  void r.offsetWidth;                            // restart the animation
+  r.classList.add('entering');
+  clearTimeout(enterTimer);
+  enterTimer = setTimeout(() => r.classList.remove('entering'), 900);
+}
+
+// The wordmark as separate letters: they rise around the pointer (CSS), and the word "decodes" from
+// random characters, like a terminal, when it first appears and when pointed at or clicked.
+const SCRAMBLE = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz0123456789#%&*+=<>/';
+function setupWordmark(el, { clickToPlay = false } = {}) {
+  if (!el || el.dataset.fx) return null;
+  el.dataset.fx = '1';
+  const text = el.textContent.trim();
+  const dim = ((el.querySelector('.dim') || {}).textContent || '').length;
+  el.setAttribute('aria-label', text);
+  el.innerHTML = [...text].map((c, i) => `<span class="ch${i < dim ? ' dim' : ''}" aria-hidden="true">${esc(c)}</span>`).join('');
+  const chars = [...el.querySelectorAll('.ch')];
+  let busy = false;
+  let last = 0;
+  const play = () => {
+    if (busy || lessMotion()) return;
+    busy = true;
+    last = Date.now();
+    const start = performance.now();
+    const per = 620 / chars.length;
+    const tick = (now) => {
+      const t = now - start;
+      let done = true;
+      chars.forEach((ch, i) => {
+        if (t >= (i + 1) * per) ch.textContent = text[i];
+        else { done = false; ch.textContent = SCRAMBLE[Math.floor(Math.random() * SCRAMBLE.length)]; }
+      });
+      if (done) busy = false; else requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  };
+  el.addEventListener('mouseenter', () => { if (Date.now() - last > 2500) play(); });
+  if (clickToPlay) el.addEventListener('click', play);
+  return play;
+}
+
+(function setupMotion() {
+  const playHome = setupWordmark($('.home .wordmark'), { clickToPlay: true });
+  setupWordmark($('#logo-home'));
+  if (playHome && !$('#home').classList.contains('hidden')) setTimeout(playHome, 380);
+  // the glow behind the home wordmark leans a little towards the pointer
+  const home = $('#home');
+  let frame = 0;
+  home.addEventListener('pointermove', (e) => {
+    if (frame || lessMotion()) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      home.style.setProperty('--gx', ((e.clientX / innerWidth) - 0.5) * 60 + 'px');
+      home.style.setProperty('--gy', ((e.clientY / innerHeight) - 0.5) * 40 + 'px');
+    });
+  });
+})();
 
 // Links inside Prepify are real links (Ctrl/middle-click opens a new tab); a plain click stays in the page.
 document.addEventListener('click', (e) => {
@@ -1332,7 +1401,11 @@ function renderSourcePage(d, g, groups) {
   const showTab = (k) => {
     $$('.tabs .tab').forEach(t => { t.classList.toggle('active', t.dataset.tab === k); t.setAttribute('aria-selected', t.dataset.tab === k); });
     history.replaceState({ q: d.query, src: g.name, tab: k }, '', urlFor(d.query, g.name, k));
-    $('#tab-body').innerHTML = tabBody(k, g, groups);
+    const body = $('#tab-body');
+    body.innerHTML = tabBody(k, g, groups);
+    body.classList.remove('tab-enter');
+    void body.offsetWidth;                         // fade the new tab's content in
+    body.classList.add('tab-enter');
     wireTab(k, name);
   };
   $$('.tabs .tab').forEach(t => t.onclick = () => showTab(t.dataset.tab));
