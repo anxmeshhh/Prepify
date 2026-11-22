@@ -103,10 +103,23 @@ With a Groq API key in `.env` (`GROQ_API_KEY=...`, then restart), signed-in user
 - **Tidy pulled questions** (on the faster `openai/gpt-oss-20b`, `PREPIFY_AI_FAST_MODEL`, about 100 questions in under 10 seconds): fixes messy scraped text, hides things that aren't questions, merges the same question asked in different words across sources, and tags each question by subject, round and difficulty. This runs automatically for new questions while AI assist is on, and **Show as pulled** brings back the original text.
 - **Read any job description:** a deeper reading of pasted or uploaded JDs. It fills the same tabs as the standard reading and adds a *Worth checking* list (bond, shifts, missing salary and so on). Anything the AI leaves empty, and the round predictions when the JD states no process, come from the standard reading. If the AI is unavailable, the standard reading is used. Scanned PDFs and photos still need pasting, because there is no vision model on this provider.
 - **Understand any search:** when the standard parser can't find the company or has to guess, the AI reads the search (typos, descriptions, unusual wording).
+- **Prep content (on a click, cost shown):** a company brief with a source on every point, model answers for questions that came without one, and a deeper resume match.
+- **Practise answering:** every question card has **Practise answering**. Write your answer and get feedback the way the interviewer would give it: a verdict and score, what worked, what to fix, a stronger answer and the likely follow-up (about 1K tokens).
+- **Mock interview:** five pulled questions, the most reported first and mixed across subjects, one at a time, then a summary with the answers to practise again.
+- **Ask about your results:** ask anything ("what do they ask in the technical round?"). The answer comes only from the experiences and questions you pulled, with a clickable source on every point (about 3K tokens).
+
+**Tokens are spent once:**
+- every AI result is remembered in `.prepify-ai-cache.json` next to the app, so asking again, reloading or opening another tab costs nothing, even after a restart. Results built from your resume or your practice answers stay in memory only;
+- questions and model answers are remembered one by one, so a new batch pays only for the questions not seen before;
+- the same request arriving twice at once (a double click, two tabs) is sent once;
+- duplicate checks send the AI only the known questions that share words with the new ones;
+- the instructions are fixed text (the company and role travel with the data), and prompts carry compact data.
+
+A request that needed no new AI call doesn't count against the daily limit.
 
 **Prompt injection screening:** scraped questions, JDs and searches are first checked by Llama Prompt Guard 2 (`meta-llama/llama-prompt-guard-2-22m`). Text that tries to give the AI instructions is never sent to it: a flagged question is kept as pulled, a flagged JD gets the standard reading, and a flagged search uses the standard parser.
 
-The questions, JD and searches are sent to Groq's API and the results come straight back; the resume is never sent, and Prepify stores nothing. Each user gets `PREPIFY_AI_DAILY_LIMIT` AI requests a day (60 by default, counted in memory). Groq's free tier allows 8,000 tokens a minute for gpt-oss-120b, so questions go in batches of 40 and Prepify waits and retries when Groq asks it to. All AI code is in `ai.py`.
+The questions, JD and searches are sent to Groq's API and the results come straight back. The resume is sent only for the deeper resume match, and a practice answer only when you ask for feedback on it. Nothing is stored on any server. Each user gets `PREPIFY_AI_DAILY_LIMIT` AI requests a day (60 by default, counted in memory). Groq's free tier allows 8,000 tokens a minute for gpt-oss-120b, so questions go in batches of 40 and Prepify waits and retries when Groq asks it to. All AI code is in `ai.py`.
 
 ## Using results
 
@@ -115,7 +128,8 @@ The questions, JD and searches are sent to Groq's API and the results come strai
 
 - **Dashboard:** one box per source. Click a filled box to open that source's own page, or an empty box to pull it.
 - **Source page:** tabs for *Experiences*, *Questions & answers*, *Discussions*, *Reviews* and *Source pages*, with filters by outcome or subject, a switcher between sources and **Back to results**. Browser back and forward work too.
-- **Download PDF:** all sources from the dashboard, or one source from its page. The PDF is built in your browser.
+- **Download PDF:** all sources from the dashboard, one source from its page, or the company brief on its own (**Download brief**). Every PDF has the same design: a cover with the key numbers and clickable contents, each part on its own page, and page numbers. It is built in your browser.
+- **No duplicates:** pulling again, retrying, or the same page reached by two links never adds an item twice. Questions, answers, reviews and experiences are matched ignoring numbering, case, spacing and punctuation, and a repeat only adds what is new, such as another answer or a longer text. A source already being pulled isn't started a second time.
 
 ## Sharing Prepify (Windows app)
 
@@ -156,11 +170,12 @@ Share the folder or the zip. Your `.env` is not included, so your Groq key stays
 | Path | What it is |
 | --- | --- |
 | `app.py` | Flask routes: `/api/parse`, `/api/jd`, `/api/ai/*`, Google sign-in (`/api/auth/*`), official pages and Reddit; no database |
-| `ai.py` | AI assist (Groq: gpt-oss-120b, screened by Prompt Guard 2): question tidying, JD reading and search reading, with the daily limit |
+| `ai.py` | AI assist (Groq: gpt-oss-120b and gpt-oss-20b, screened by Prompt Guard 2): tidying, JD and search reading, brief, model answers, resume match, answer feedback and questions about results; the token budget and the results cache |
 | `query_parser.py` | Understanding search queries: company, role, level, location, rounds, topics |
 | `jd.py`, `skills.py` | Job description and resume analysis, and the skills list with revision topics and practice questions |
 | `tests/` | `python -m pytest tests` |
 | `templates/search.html`, `static/search.*`, `static/jd.js`, `static/ai.js` | Search home page, results pages, JD page, AI assist and in-tab session store |
+| `static/prep.js`, `static/practice.js`, `static/pdf.js` | Brief, model answers and resume match; practice, mock interviews and questions about results; PDF export |
 | `extension/` | Prepify Capture Chrome extension (Manifest V3) |
 | `build_exe.py`, `packaging/` | Builds the shareable Windows app into `desktop_app/` (and `dist/Prepify-windows.zip`), with its user guide and settings file |
 | `desktop_app/` | The ready-to-share folder: `Prepify.exe`, `extension/`, `prepify-settings.txt`, `HOW-TO-USE.txt` |

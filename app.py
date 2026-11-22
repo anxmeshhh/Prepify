@@ -31,6 +31,7 @@ except ImportError:
 import ai  # noqa: E402  (reads its settings from the environment loaded above)
 
 ai.USAGE_FILE = os.path.join(HOME_DIR, '.prepify-usage.json')     # the AI token ledger: counts only, no content
+ai.CACHE_FILE = os.path.join(HOME_DIR, '.prepify-ai-cache.json')   # AI results already paid for (see ai.py)
 import jd as jd_reader  # noqa: E402
 import site_index  # noqa: E402
 from query_parser import parse_query  # noqa: E402
@@ -262,6 +263,8 @@ def ai_questions():
         out, model = ai.tidy_questions(str(body.get('company') or ''), items, known)
     except Exception as e:
         return _ai_failed(user, e, 'question tidying')
+    if not out.get('fresh'):
+        ai.refund(user['email'])          # every question was tidied before: nothing was paid for
     return _ai_done(user, {**out, 'model': model})
 
 
@@ -288,18 +291,27 @@ def _list(v, n):
 
 
 def _cached_or_run(kind, payload, run, what):
-    """Serve a result already made for exactly this input; otherwise make it within the budget."""
+    """Each distinct request is paid for once: a result already made for exactly this input is served as is, the
+    same request arriving while it runs waits for it (double clicks, two tabs), and a request whose parts were
+    all made before doesn't count against the daily allowance."""
     user = current_user()
-    hit = ai.cached(kind, payload)
-    if hit and user:
-        return jsonify({**hit, 'cached': True, 'ai': ai.status(user)})
+    if user:
+        try:
+            hit = ai.cached(kind, payload) or ai.wait_inflight(kind, payload)
+        except ai.AIError:
+            hit = None                            # the running one failed: try again below
+        if hit:
+            return jsonify({**hit, 'cached': True, 'ai': ai.status(user)})
     user, err = _ai_begin()
     if err:
         return err
     try:
-        result = ai.remember(kind, payload, run())
+        result, fresh = ai.once(kind, payload, run)
     except Exception as e:
         return _ai_failed(user, e, what)
+    if not fresh or (isinstance(result, dict) and result.get('fresh') == 0):
+        ai.refund(user['email'])
+        return jsonify({**result, 'cached': True, 'ai': ai.status(user)})
     return _ai_done(user, result)
 
 
@@ -338,6 +350,37 @@ def ai_resume():
                       'responsibilities': [str(r)[:200] for r in _list(jd.get('responsibilities'), 8)]},
                'resume_text': str(b.get('resume_text') or '')[:ai.RESUME_CHARS]}
     return _cached_or_run('resume', payload, lambda: ai.resume_coach(**payload), 'resume match')
+
+
+@app.route('/api/ai/feedback', methods=['POST'])
+def ai_feedback():
+    """Feedback on the candidate's own answer to a question (practice and mock interviews)."""
+    b = request.get_json(silent=True) or {}
+    payload = {'company': str(b.get('company') or '')[:100], 'role': str(b.get('role') or '')[:80],
+               'question': str(b.get('question') or '')[:400],
+               'answer': str(b.get('answer') or '')[:ai.FEEDBACK_ANSWER_CHARS],
+               'reference': str(b.get('reference') or '')[:1500]}
+    if not payload['question'].strip():
+        return jsonify({'error': 'There is no question to practise.'}), 400
+    if len(payload['answer'].strip()) < 3:
+        return jsonify({'error': 'Write your answer first.'}), 400
+    return _cached_or_run('feedback', payload, lambda: ai.answer_feedback(**payload), 'answer feedback')
+
+
+@app.route('/api/ai/ask', methods=['POST'])
+def ai_ask():
+    """A question about everything the candidate pulled, answered from it with sources."""
+    b = request.get_json(silent=True) or {}
+    payload = {'company': str(b.get('company') or '')[:100], 'question': str(b.get('question') or '').strip()[:300],
+               'experiences': [{k: str(x.get(k) or '')[:1500] for k in ('id', 'source', 'role', 'date', 'text')}
+                               for x in _list(b.get('experiences'), 20) if isinstance(x, dict)],
+               'questions': [{'id': str(q.get('id') or '')[:20], 'text': str(q.get('text') or '')[:300]}
+                             for q in _list(b.get('questions'), 60) if isinstance(q, dict)]}
+    if not payload['company'] or len(payload['question']) < 4:
+        return jsonify({'error': 'Type a question first.'}), 400
+    if not (payload['experiences'] or payload['questions']):
+        return jsonify({'error': 'Pull some interview experiences first.'}), 400
+    return _cached_or_run('ask', payload, lambda: ai.ask_results(**payload), 'question about your results')
 
 
 # ---------- Sign in with Google (optional) ----------
@@ -499,6 +542,10 @@ class UnsafeURL(ValueError):
     pass
 
 
+class Unreachable(UnsafeURL):
+    """The name didn't resolve: offline, a VPN or DNS trouble, or a mistyped address."""
+
+
 def _check_public(url):
     """Only http(s) on the normal ports, to hosts whose every address is public: a pasted careers link must
     never make the server reach its own machine, the private network or the cloud's metadata service."""
@@ -513,7 +560,7 @@ def _check_public(url):
     try:
         infos = socket.getaddrinfo(parts.hostname, parts.port or (443 if parts.scheme == 'https' else 80))
     except socket.gaierror:
-        raise UnsafeURL("that address doesn't exist")
+        raise Unreachable(parts.hostname)
     for info in infos:
         ip = ipaddress.ip_address(info[4][0].split('%')[0])
         if not ip.is_global or ip.is_multicast:
@@ -604,6 +651,9 @@ def official_source():
             return jsonify({'error': 'that is not a web address'}), 400
         try:
             _check_public(u)
+        except Unreachable as e:
+            return jsonify({'error': f"Couldn't reach {e}. Check the internet connection (or turn off a VPN) and retry.",
+                            'reason': 'unreachable', 'tried': u}), 502
         except UnsafeURL as e:
             return jsonify({'error': f"Prepify can't read that link: {e}.", 'needs_url': True, 'reason': 'unsafe'}), 400
 

@@ -72,12 +72,13 @@ function openAiConsent(then) {
           <li>Tidies pulled questions: fixes messy text, hides things that aren't questions, merges the same question across sources and tags each by round and difficulty.</li>
           <li>Reads job descriptions in any layout${auth.ai && auth.ai.files ? ', including scanned PDFs and photos' : ''}, and lists points worth checking.</li>
           <li>Understands searches the standard reading can't.</li>
+          <li>When you click: writes a company brief and model answers, gives feedback on your practice answers and mock interviews, and answers questions about what you pulled.</li>
         </ul>
       </div>
       <div class="ai-sends">
         <div class="xp-label">What is sent</div>
         <p>The questions you pull, any job description you add, and searches Prepify can't read are sent to
-          ${esc(aiProvider())}'s API to be processed. Your resume is sent only when you ask for the deeper resume match. The results come straight back to this tab,
+          ${esc(aiProvider())}'s API to be processed. Your resume is sent only when you ask for the deeper resume match, and a practice answer only when you ask for feedback on it. The results come straight back to this tab,
           and Prepify stores nothing on its server.${auth.ai && auth.ai.guard ? ' Text is screened first, and anything that tries to give the AI instructions is left out.' : ''}</p>
       </div>
       <p class="modal-note">AI assist works within a daily budget (${esc(auth.ai && auth.ai.tokens && auth.ai.tokens.user_budget ? fmtTokens(auth.ai.tokens.user_budget) : '50K')} tokens for you) and stops before the provider's limit.

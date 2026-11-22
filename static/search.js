@@ -218,23 +218,70 @@ function clearStore() {
   try { sessionStorage.removeItem(STORE_KEY); } catch (e) { /* ignore */ }
 }
 
-// Tidy data saved by older versions (glued questions, "Interview" titles) so nothing needs re-pulling.
+// ---------- the same thing is stored once ----------
+// Pulling again, retrying, parallel article tabs and the same page reached by two links all deliver items
+// that are already here, often with small differences: "Q1." numbering, case, spacing, punctuation, a
+// trailing "Read more". These keys ignore all of that, so each question, answer, review and experience is
+// kept once per site (questions are merged across sites later, when shown).
+const dupKey = (t) => String(t || '').toLowerCase()
+  .replace(/^\s*(?:q(?:uestion)?\s*\d+\s*[:.)\-]|\d{1,2}\s*[.)])\s*/, '')
+  .replace(/\b(read more|show more|see more)\b/g, ' ')
+  .replace(/[^a-z0-9]+/g, ' ').trim();
+const reviewKey = (r) => [r.title, r.pros, r.cons, r.body].map(dupKey).join('|');
+function experienceKey(x) {
+  const qs = (x.questions || []).map(q => dupKey(q.text)).join('|');
+  const body = dupKey([x.process, x.application, ...(x.rounds || []).map(r => `${r.name} ${r.detail || ''}`)].filter(Boolean).join(' '));
+  // an article page is one experience: its address identifies it; list pages hold many, so use the content
+  return [dupKey(cleanRole(x.role)), dupKey(x.date), body.slice(0, 160) || qs.slice(0, 160)].join('#');
+}
+function addAnswers(target, answers) {
+  const have = new Set((target.answers || []).map(dupKey));
+  target.answers = target.answers || [];
+  answers.forEach(a => { const k = dupKey(a); if (k && !have.has(k)) { have.add(k); target.answers.push(a); } });
+}
+function mergeExperience(into, x) {
+  // the second copy may have read more of the page: keep the longer text and every question once
+  ['process', 'application', 'tips'].forEach(f => { if ((x[f] || '').length > (into[f] || '').length) into[f] = x[f]; });
+  if ((x.rounds || []).length > (into.rounds || []).length) into.rounds = x.rounds;
+  const have = new Map((into.questions || []).map(q => [dupKey(q.text), q]));
+  (x.questions || []).forEach(q => {
+    const k = dupKey(q.text);
+    if (!k) return;
+    if (have.has(k)) addAnswers(have.get(k), q.answers || []);
+    else { into.questions = into.questions || []; into.questions.push(q); have.set(k, q); }
+  });
+}
+
+// Tidy data saved by older versions (glued questions, "Interview" titles, near-duplicates) so nothing
+// needs re-pulling.
 function normalizeStore() {
   Object.values(store.companies).forEach(c => {
-    const merged = [];
+    const qs = new Map();
     cleanQuestions(c.questions).forEach(q => {
-      const have = merged.find(m => m.source === q.source && m.text === q.text);
-      if (have) (q.answers || []).forEach(a => { if (!have.answers.includes(a)) have.answers.push(a); });
-      else merged.push(q);
+      const k = q.source + '|' + dupKey(q.text);
+      if (qs.has(k)) addAnswers(qs.get(k), q.answers || []);
+      else qs.set(k, q);
     });
-    c.questions = merged;
-    (c.experiences || []).forEach(x => { x.role = cleanRole(x.role); x.questions = cleanQuestions(x.questions); });
+    c.questions = [...qs.values()];
+    const xs = new Map();
+    (c.experiences || []).forEach(x => {
+      x.role = cleanRole(x.role);
+      x.questions = cleanQuestions(x.questions);
+      const k = x.source + '|' + experienceKey(x);
+      if (xs.has(k)) mergeExperience(xs.get(k), x);
+      else xs.set(k, { ...x, _k: experienceKey(x) });
+    });
+    c.experiences = [...xs.values()];
+    const rs = new Map();
+    (c.reviews || []).forEach(r => { const k = r.source + '|' + reviewKey(r); if (!rs.has(k)) rs.set(k, { ...r, _k: reviewKey(r) }); });
+    c.reviews = [...rs.values()];
   });
   saveStore();
 }
 normalizeStore();
 
-// Adds what the extension captured; the same question is kept once per site, answers merged.
+// Adds what the extension captured. Each question, review and experience is kept once per site (see dupKey);
+// a repeat adds only what is new (an answer, a longer text). Returns how many new items were added.
 function addCapture(payload, fallbackCompany) {
   const name = (payload.company_name || fallbackCompany || '').trim();
   if (!name) return 0;
@@ -249,11 +296,10 @@ function addCapture(payload, fallbackCompany) {
   cleanQuestions(payload.questions).forEach(it => {
     const text = it.text;
     const answers = [].concat(it.answers || []).filter(a => typeof a === 'string' && a.trim()).map(a => a.trim());
-    const existing = c.questions.find(q => q.source === src && q.text === text);
-    if (existing) {
-      answers.forEach(a => { if (!existing.answers.includes(a)) existing.answers.push(a); });
-      return;
-    }
+    const k = dupKey(text);
+    if (!k) return;
+    const existing = c.questions.find(q => q.source === src && dupKey(q.text) === k);
+    if (existing) { addAnswers(existing, answers); return; }
     c.questions.push({
       text, answers, source: src, url: payload.url,
       round_type: it.round_type || null, category: it.category || 'Other',
@@ -263,7 +309,7 @@ function addCapture(payload, fallbackCompany) {
   });
 
   (payload.reviews || []).forEach(r => {
-    const k = [r.title, r.pros, r.cons, r.body].map(x => (x || '').trim()).join('|');
+    const k = reviewKey(r);
     if (k === '|||' || c.reviews.some(x => x.source === src && x._k === k)) return;
     c.reviews.push({ ...r, review_date: r.date || null, source: src, url: payload.url, created_at: now, _k: k });
     added += 1;
@@ -277,9 +323,9 @@ function addCapture(payload, fallbackCompany) {
 
   (payload.experiences || []).forEach(raw => {
     const xp = { ...raw, role: cleanRole(raw.role), questions: cleanQuestions(raw.questions) };
-    const k = [xp.role, xp.date, (xp.process || xp.application || '').slice(0, 80), (xp.rounds || []).length,
-               xp.questions.map(q => q.text).join('|').slice(0, 120)].join('#');
-    if (c.experiences.some(x => x.source === src && x._k === k)) return;
+    const k = experienceKey(xp);
+    const same = c.experiences.find(x => x.source === src && x._k === k);
+    if (same) { mergeExperience(same, xp); return; }
     c.experiences.push({ ...xp, source: src, url: xp.url || payload.url, created_at: now, _k: k });
     added += 1;
   });
@@ -364,15 +410,24 @@ const pulls = {};                       // `${company}|${site}` -> { status, ste
 const pullKey = (company, site) => `${company.toLowerCase()}|${site}`;
 const hasExtension = () => !!document.documentElement.dataset.prepifyExt;
 
+// A pull still running for a site is not started again (double clicks, "Pull all" while one runs);
+// one that has been silent for longer than the extension's own time limit counts as finished.
+const PULL_STALE_MS = 75000;
+const pullRunning = (company, site) => {
+  const p = pulls[pullKey(company, site)];
+  return !!(p && p.status === 'working' && Date.now() - (p.at || 0) < PULL_STALE_MS);
+};
+
 function pullSources(company, sites = PULLABLE) {
   if (!signedIn()) { openSignin(); return; }
-  sites = sites.filter(s => SITES[s] && !SITES[s].linkOnly);
+  sites = sites.filter(s => SITES[s] && !SITES[s].linkOnly && !pullRunning(company, s));
+  if (!sites.length) { toast('Those sources are already being pulled.'); return; }
   const viaServer = sites.filter(s => s === 'Official' || (s === 'Reddit' && auth.sources.reddit_api));
   const viaExtension = sites.filter(s => !viaServer.includes(s));
   viaServer.forEach(s => pullFromServer(company, s));
   if (!viaExtension.length) return;
   if (!hasExtension()) { showExtensionNotice(); return; }
-  viaExtension.forEach(site => { pulls[pullKey(company, site)] = { status: 'working', step: LOCATED_SITES.includes(site) ? 'finding the company page' : 'starting' }; });
+  viaExtension.forEach(site => { pulls[pullKey(company, site)] = { status: 'working', at: Date.now(), step: LOCATED_SITES.includes(site) ? 'finding the company page' : 'starting' }; });
   refreshBoxes();
   startExtensionPull(company, viaExtension);
 }
@@ -406,7 +461,7 @@ async function startExtensionPull(company, sites) {
 // Sources the Prepify server reads through an official API (nothing is stored there).
 async function pullFromServer(company, site) {
   const key = pullKey(company, site);
-  pulls[key] = { status: 'working', step: 'searching ' + site };
+  pulls[key] = { status: 'working', at: Date.now(), step: 'searching ' + site };
   refreshBoxes();
   try {
     const link = site === 'Official' ? OFFICIAL_LINKS[company.toLowerCase()] : null;
@@ -513,7 +568,7 @@ window.addEventListener('message', (e) => {
   }
   let added = 0;
   if (m.status === 'done' && m.payload) added = addCapture(m.payload, m.company);
-  pulls[pullKey(m.company, m.site)] = { status: m.status, step: m.step, added, detail: m.detail };
+  pulls[pullKey(m.company, m.site)] = { status: m.status, step: m.step, added, detail: m.detail, at: Date.now() };
   if (m.status !== 'working') noteDiag(m.site, m.status, { added, detail: m.detail, outline: m.outline });
   m.status === 'done' ? rerender() : refreshBoxes();
 });
@@ -1122,7 +1177,7 @@ function glance(d, withData) {
   });
   const repeated = [...sites.values()].filter(e => e.sites.size > 1);
 
-  let html = '<div class="glance">' + briefHtml(d);
+  let html = '<div class="glance">' + briefHtml(d) + practiceHtml(d) + askHtml(d);
   const focus = searchFocus(d);
   if (focus) {
     html += `<section class="section">
@@ -1465,6 +1520,7 @@ function qaCard(q, i, site, alsoOn) {
              <button class="linkbtn more-btn">Show ${plural(rest.length, 'more answer')}</button>` : ''}`
         : `<div class="answer none">No answer shown on ${esc(site)}</div>${aiAnswerBlock(q, site)}`}
       ${practiceLinks(q)}
+      ${practiseButton(q)}
     </article>`;
 }
 

@@ -1270,3 +1270,39 @@ a.btn:hover { text-decoration: none; }
 /* a section title with its actions on the same line (the brief's download button) */
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
 .section-head h2 { margin: 0; }
+
+/* ---------- practice, mock interviews and questions about your results (practice.js) ---------- */
+.modal-box.practice-box { max-width: 680px; max-height: calc(100vh - 32px); overflow-y: auto; gap: var(--space-4); }
+.practice-box h2 { font-size: 17px; line-height: 1.45; }
+.practice-box .field label { font-size: 13px; color: var(--text); font-weight: 700; }
+.practice-box textarea { font: inherit; font-size: 14px; line-height: 1.6; color: var(--text); background: var(--bg);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 12px; resize: vertical; min-height: 150px; width: 100%; }
+.practice-box textarea:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+.feedback { display: flex; flex-direction: column; gap: var(--space-4); border-top: 1px solid var(--border); padding-top: var(--space-4); }
+.fb-top { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.fb-score { font-size: 14px; color: var(--muted); }
+.fb-score b { font-size: 22px; color: var(--text); }
+.fb-cached { font-size: 12px; color: var(--muted); }
+.verdict { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 999px; font-size: 13px; font-weight: 700; border: 1px solid; }
+.verdict.small { height: 22px; padding: 0 8px; font-size: 12px; flex: none; }
+.verdict.strong { color: var(--good); border-color: var(--good); background: rgba(127, 216, 143, 0.10); }
+.verdict.good { color: var(--warn); border-color: var(--warn); background: rgba(245, 167, 66, 0.10); }
+.verdict.weak { color: var(--error); border-color: var(--error); background: rgba(224, 108, 117, 0.10); }
+.fb-block .xp-label, .fb-follow .xp-label { display: block; margin-bottom: var(--space-2); }
+.fb-follow { background: var(--element); border: 1px solid var(--border); border-left: 3px solid var(--link); border-radius: var(--radius-sm); padding: var(--space-3) var(--space-4); }
+.fb-follow p { margin: 0 0 var(--space-2); }
+.practise-btn { margin-top: var(--space-2); }
+.practice-actions { display: flex; gap: var(--space-3); flex-wrap: wrap; margin: var(--space-3) 0; }
+.mock-summary { margin-top: var(--space-3); }
+.mock-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); margin: var(--space-3) 0; }
+.mock-stats div { background: var(--element); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-3); display: flex; flex-direction: column; gap: 2px; }
+.mock-stats b { font-size: 22px; }
+.mock-stats span { font-size: 12px; color: var(--muted); }
+.mock-weak { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.mock-weak li { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; padding: var(--space-2) 0; border-top: 1px solid var(--border); }
+.mock-weak li span:nth-child(2) { flex: 1 1 260px; }
+.ask-form { display: flex; gap: var(--space-3); flex-wrap: wrap; margin: var(--space-3) 0; }
+.ask-form .qa-filter { flex: 1 1 320px; margin: 0; }
+.ask-answer { margin-top: var(--space-3); }
+.ask-q { font-weight: 700; color: var(--accent); margin-bottom: var(--space-2); }
+@media (max-width: 640px) { .mock-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

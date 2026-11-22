@@ -233,7 +233,11 @@ async function loginCleared(tabId) {
 }
 
 async function startResearch(company, sites, uiTabId, urls = {}, match = {}) {
+  const running = Object.values(await getJobs())
+    .filter(j => !j.child && j.uiTabId === uiTabId && (j.company || '').toLowerCase() === (company || '').toLowerCase())
+    .map(j => j.site);
   for (const site of sites) {
+    if (running.includes(site)) continue;        // already being pulled for this tab: never two jobs for one site
     if (API_SOURCES[site]) { runApiSource(site, company, uiTabId); continue; }
     if (!START_URL[site]) continue;
     // Prepify may already know the company's page on this site (from the site's own index)

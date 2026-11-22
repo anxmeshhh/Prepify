@@ -28,3 +28,5 @@ dist/
 # desktop_app/ is shared as-is: never a user's own files from running it there
 desktop_app/.env
 desktop_app/.prepify-*
+.prepify-ai-cache.json
+.prepify-ai-cache.json.tmp
