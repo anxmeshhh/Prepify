@@ -7,7 +7,8 @@ const SETUP = { status: null };
 
 function setupModal(id, html, { closable = false } = {}) {
   let el = $('#' + id);
-  if (!el) {
+  if (el) return el;                       // already open: never wipe what the person is typing
+  {
     el = document.createElement('div');
     el.id = id;
     el.className = 'modal';
@@ -59,7 +60,9 @@ function openWelcome() {
     btn.textContent = 'Saving…';
     const name = $('#welcome-name').value.trim();
     try {
-      await getJson('/api/setup/profile', { method: 'POST', body: JSON.stringify({ name, email: $('#welcome-email').value }) });
+      const email = $('#welcome-email').value.trim();
+      await getJson('/api/setup/profile', { method: 'POST', body: JSON.stringify({ name, email }) });
+      rememberProfile({ name, email });
       el.remove();
       toast(`Welcome to Prepify, ${name.split(' ')[0]}!`);
       if (SETUP.status && !SETUP.status.groq_key) openGroqKey(true);
@@ -126,6 +129,20 @@ function openGroqKey(firstRun = false) {
   };
 }
 
+// ---------- remembered in this browser too ----------
+// Every copy of Prepify (the developer copy, a Prepify.exe in another folder) runs at localhost:5000, so the
+// browser remembers who filled in the welcome: another copy is told quietly instead of asking again.
+const PROFILE_KEY = 'prepify.profile';
+function rememberProfile(p) {
+  try { localStorage.setItem(PROFILE_KEY, JSON.stringify({ name: p.name, email: p.email })); } catch (e) { /* storage blocked */ }
+}
+function rememberedProfile() {
+  try {
+    const p = JSON.parse(localStorage.getItem(PROFILE_KEY) || 'null');
+    return p && p.name && p.email ? p : null;
+  } catch (e) { return null; }
+}
+
 // ---------- on start ----------
 async function checkSetup() {
   try {
@@ -134,8 +151,18 @@ async function checkSetup() {
     return;                                  // server unreachable: the page shows its own error
   }
   if (!SETUP.status.local) return;          // a hosted copy has no first-run setup
-  if (!SETUP.status.registered) openWelcome();
-  else if (!SETUP.status.groq_key && !sessionStorageFlag('prepify.groq.asked')) openGroqKey(true);
+  if (SETUP.status.registered && SETUP.status.name && SETUP.status.email) rememberProfile(SETUP.status);
+  if (!SETUP.status.registered) {
+    const known = rememberedProfile();
+    if (known) {
+      try {
+        await getJson('/api/setup/profile', { method: 'POST', body: JSON.stringify(known) });
+        SETUP.status.registered = true;
+      } catch (e) { /* refused (changed rules): ask below */ }
+    }
+    if (!SETUP.status.registered) { openWelcome(); return; }
+  }
+  if (!SETUP.status.groq_key && !sessionStorageFlag('prepify.groq.asked')) openGroqKey(true);
 }
 
 // ask for the key once per browser session, not on every page load

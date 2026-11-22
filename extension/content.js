@@ -623,12 +623,15 @@
   }
 
   async function settle() {
-    // single-page apps keep rendering after load; wait until the text stops growing
+    // single-page apps keep rendering after load: check every 300 ms and go on once the text has stopped
+    // changing for about a second (at most ~7 s for slow pages)
     let last = -1;
-    for (let i = 0; i < 8; i++) {
-      await sleep(1000);
+    let stable = 0;
+    for (let i = 0; i < 24; i++) {
+      await sleep(300);
       const len = document.body ? document.body.innerText.length : 0;
-      if (len === last && len > 500) break;
+      stable = len === last && len > 500 ? stable + 1 : 0;
+      if (stable >= 3) break;
       last = len;
     }
   }

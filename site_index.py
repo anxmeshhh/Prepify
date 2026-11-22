@@ -145,3 +145,14 @@ def locate(site, company):
             or next((u for u in pages if re.search(rf'/{seg}/interview-questions/?$', u)), None)
             or f'https://prepinsta.com/{seg}/')
     return {'covered': True, 'url': best, 'match': [seg], 'count': len(pages)}
+
+
+def warm():
+    """Read every site's index in the background, so the first pull of the day doesn't wait for it."""
+    def run(site):
+        try:
+            _index(site)
+        except Exception:
+            pass                           # the first locate() will try again and report the problem
+    for site in _BUILD:
+        threading.Thread(target=run, args=(site,), daemon=True).start()

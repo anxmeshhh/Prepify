@@ -382,27 +382,25 @@ function pullSources(company, sites = PULLABLE) {
 const LOCATED_SITES = ['Code360', 'PrepInsta'];
 
 async function startExtensionPull(company, sites) {
-  const urls = {};
-  const match = {};
-  const go = [];
-  await Promise.all(sites.map(async (site) => {
-    if (!LOCATED_SITES.includes(site)) { go.push(site); return; }
+  const start = (list, urls = {}, match = {}) => {
+    if (list.length) window.postMessage({ source: 'prepify-page', type: 'research:start', company, sites: list, urls, match }, location.origin);
+  };
+  // sites that need no lookup start right away; each looked-up site starts as soon as its own page is found
+  start(sites.filter(s => !LOCATED_SITES.includes(s)));
+  await Promise.all(sites.filter(s => LOCATED_SITES.includes(s)).map(async (site) => {
     try {
       const r = await getJson(`/api/sources/locate?site=${encodeURIComponent(site)}&company=${encodeURIComponent(company)}`);
       if (!r.covered) {
         pulls[pullKey(company, site)] = { status: 'not-covered', detail: r.message };
         noteDiag(site, 'not-found', { detail: r.message });
+        refreshBoxes();
         return;
       }
-      urls[site] = r.url;
-      match[site] = r.match || [];
-      go.push(site);
+      start([site], { [site]: r.url }, { [site]: r.match || [] });
     } catch (e) {
-      go.push(site);                   // the index couldn't be read: fall back to the extension's own guess
+      start([site]);                   // the index couldn't be read: fall back to the extension's own guess
     }
   }));
-  refreshBoxes();
-  if (go.length) window.postMessage({ source: 'prepify-page', type: 'research:start', company, sites: go, urls, match }, location.origin);
 }
 
 // Sources the Prepify server reads through an official API (nothing is stored there).

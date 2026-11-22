@@ -90,6 +90,8 @@ SETTINGS_FILE = os.path.join(HOME_DIR, 'prepify-settings.txt')
 ENV_FILE = SETTINGS_FILE if (FROZEN or os.path.exists(SETTINGS_FILE)) else os.path.join(HOME_DIR, '.env')
 if not PUBLIC_URL:
     setup_local.sync_in_background(PROFILE_FILE)      # details saved while offline go to Supabase now
+if not os.environ.get('PYTEST_CURRENT_TEST') and 'pytest' not in sys.modules:
+    site_index.warm()                                  # Code360 / PrepInsta indexes ready before the first pull
 
 
 def _local_only():
@@ -103,7 +105,8 @@ def _local_only():
 def setup_status():
     profile = setup_local.load_profile(PROFILE_FILE)
     return jsonify({'local': not PUBLIC_URL, 'registered': bool(profile) or bool(PUBLIC_URL),
-                    'name': profile and profile.get('name'), 'synced': bool(profile and profile.get('synced')),
+                    'name': profile and profile.get('name'), 'email': profile and profile.get('email'),
+                    'synced': bool(profile and profile.get('synced')),
                     'groq_key': ai.available(), 'version': setup_local.APP_VERSION})
 
 

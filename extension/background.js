@@ -7,9 +7,14 @@
 //    background tab of the user's own signed-in browser, content.js reads them, the tab closes.
 //    Limits: at most MAX_HOPS navigations plus MAX_ARTICLES article pages per site, no pagination.
 //  * Reddit: old.reddit.com search, then up to MAX_ARTICLES threads with their top comments.
+// Speed: a search page's articles are read in parallel background tabs (at most MAX_OPEN_ARTICLES at
+// once across all sites), and Prepify's own background tabs skip images, video and fonts (text is all
+// that's read). Tabs the user sees, such as a sign-in page, load normally.
 const MAX_HOPS = 3;
 const MAX_ARTICLES = 4;
+const MAX_OPEN_ARTICLES = 8;
 const JOB_TIMEOUT_MS = 60000;
+const ARTICLE_TIMEOUT_MS = 25000;
 const APP_URLS = ['http://localhost:5000/*', 'http://127.0.0.1:5000/*'];
 
 const START_URL = {
@@ -33,6 +38,106 @@ async function getJobs() {
 async function setJobs(jobs) {
   await chrome.storage.session.set({ jobs });
 }
+// Read-modify-write of the jobs, one at a time: parallel article tabs report at the same moment.
+let jobsLock = Promise.resolve();
+function withJobs(fn) {
+  const run = jobsLock.then(async () => {
+    const jobs = await getJobs();
+    const out = await fn(jobs);
+    await setJobs(jobs);
+    return out;
+  });
+  jobsLock = run.catch(() => {});
+  return run;
+}
+
+// ---------- lighter background tabs: no images, video or fonts in tabs Prepify opened for reading ----------
+async function lighten(tabId) {
+  try {
+    await chrome.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: [tabId],
+      addRules: [{ id: tabId, priority: 1, action: { type: 'block' },
+                   condition: { tabIds: [tabId], resourceTypes: ['image', 'media', 'font'] } }]
+    });
+  } catch (e) { /* not available: the tab just loads everything */ }
+}
+function unlighten(tabId) {
+  chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [Number(tabId)] }).catch(() => {});
+}
+
+// A background tab for reading: opened blank, lightened and registered, then sent to the page, so the
+// page's first question ("am I a research tab?") always finds its job.
+async function openReadingTab(url, job, timeoutMs, onTimeout) {
+  const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+  await lighten(tab.id);
+  await withJobs(jobs => { jobs[tab.id] = job; });
+  await chrome.tabs.update(tab.id, { url });
+  setTimeout(() => onTimeout(tab.id), timeoutMs);
+  return tab.id;
+}
+
+// ---------- articles read in parallel: each a child tab of its site's job ----------
+const articleQueue = [];      // [{ parentId, url }] waiting for a free slot
+let openArticles = 0;
+
+function queueArticles(parentId, urls) {
+  urls.forEach(url => articleQueue.push({ parentId, url }));
+  pumpArticles();
+}
+
+async function pumpArticles() {
+  while (openArticles < MAX_OPEN_ARTICLES && articleQueue.length) {
+    const { parentId, url } = articleQueue.shift();
+    const parent = (await getJobs())[parentId];
+    if (!parent) continue;                       // the site's job already ended
+    openArticles += 1;
+    try {
+      await openReadingTab(url, { child: true, parent: parentId, site: parent.site, company: parent.company,
+                                  uiTabId: parent.uiTabId, reading: true, located: parent.located, match: parent.match },
+                           ARTICLE_TIMEOUT_MS, (id) => articleDone(id, null));
+    } catch (e) {
+      openArticles -= 1;
+      articleDone(null, null, parentId);
+    }
+  }
+}
+
+// One article finished (payload), failed or timed out (null). When the site's last one is in, the site is done.
+async function articleDone(childId, payload, parentIdIfNoTab = null, wall = null) {
+  const r = await withJobs(jobs => {
+    let parentId = parentIdIfNoTab;
+    if (childId !== null) {
+      const c = jobs[childId];
+      if (!c) return { gone: true };             // already counted (finished, then timed out)
+      delete jobs[childId];
+      parentId = c.parent;
+    }
+    const parent = jobs[parentId];
+    if (!parent) return { closed: true };
+    parent.acc = parent.acc || emptyPayload(parent);
+    if (payload) mergeInto(parent.acc, payload);
+    if (wall && !parent.wall) parent.wall = wall;
+    parent.read += 1;
+    parent.pending -= 1;
+    return { parentId, job: JSON.parse(JSON.stringify(parent)) };
+  });
+  if (r && r.gone) return;
+  if (childId !== null) {
+    unlighten(childId);
+    chrome.tabs.remove(Number(childId)).catch(() => {});
+    openArticles = Math.max(0, openArticles - 1);
+    pumpArticles();
+  }
+  if (!r || r.closed) return;
+  const { parentId, job } = r;
+  if (job.pending > 0) {
+    notifyUi(job, 'working', { step: `read ${job.read} of ${job.total} ${job.site === 'Reddit' ? 'threads' : 'articles'}` });
+  } else if (hasContent(job.acc)) {
+    finishJob(parentId, 'done', { payload: job.acc });
+  } else {
+    finishJob(parentId, job.wall || 'empty');    // nothing read: a sign-in or check stopped the articles
+  }
+}
 
 function notifyUi(job, status, extra = {}) {
   chrome.tabs.sendMessage(job.uiTabId, {
@@ -50,11 +155,20 @@ function mergeInto(acc, p) {
 const hasContent = (p) => p && (p.questions.length || p.reviews.length || p.experiences.length);
 
 async function finishJob(tabId, status, extra = {}) {
-  const jobs = await getJobs();
-  const job = jobs[tabId];
-  if (!job) return;
-  delete jobs[tabId];
-  await setJobs(jobs);
+  const r = await withJobs(jobs => {
+    const job = jobs[tabId];
+    if (!job) return null;
+    delete jobs[tabId];
+    // its article tabs still open (the site timed out): close them
+    const children = Object.keys(jobs).filter(id => jobs[id].parent === Number(tabId) || jobs[id].parent === tabId);
+    children.forEach(id => delete jobs[id]);
+    return { job, children };
+  });
+  if (!r) return;
+  const { job, children } = r;
+  children.forEach(id => { unlighten(id); chrome.tabs.remove(Number(id)).catch(() => {}); });
+  if (children.length) { openArticles = Math.max(0, openArticles - children.length); pumpArticles(); }
+  unlighten(tabId);
   // articles already read count even if a later one failed
   if (status !== 'done' && hasContent(job.acc)) { status = 'done'; extra = { ...extra, payload: job.acc }; }
   // A sign-in wall or "verify you're human" check needs the user: keep that tab, put it just to the
@@ -124,13 +238,12 @@ async function startResearch(company, sites, uiTabId, urls = {}, match = {}) {
     if (!START_URL[site]) continue;
     // Prepify may already know the company's page on this site (from the site's own index)
     const located = urls && typeof urls[site] === 'string' && /^https:\/\//.test(urls[site]) ? urls[site] : null;
-    const tab = await chrome.tabs.create({ url: located || START_URL[site](company), active: false });
-    const jobs = await getJobs();               // save before the page can ask "whoami"
-    jobs[tab.id] = { site, company, uiTabId, hops: 0, queue: [], read: 0, acc: null, started: Date.now(),
-                     located: !!located, match: Array.isArray(match && match[site]) ? match[site].slice(0, 4) : [] };
-    await setJobs(jobs);
-    notifyUi(jobs[tab.id], 'working');
-    setTimeout(() => finishJob(tab.id, 'timeout'), JOB_TIMEOUT_MS);
+    const job = { site, company, uiTabId, hops: 0, read: 0, pending: 0, total: 0, acc: null, started: Date.now(),
+                  located: !!located, match: Array.isArray(match && match[site]) ? match[site].slice(0, 4) : [] };
+    notifyUi(job, 'working');
+    // all sites start together; none waits for another
+    openReadingTab(located || START_URL[site](company), job, JOB_TIMEOUT_MS, (id) => finishJob(id, 'timeout'))
+      .catch(e => notifyUi(job, 'error', { detail: String(e.message || e) }));
   }
 }
 
@@ -188,12 +301,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'research:navigate') {
-    getJobs().then(async jobs => {
+    withJobs(jobs => {
       const job = jobs[tabId];
-      if (!job) return sendResponse(false);
-      if (job.hops >= MAX_HOPS) { await finishJob(tabId, 'not-found'); return sendResponse(false); }
+      if (!job || job.child) return null;
+      if (job.hops >= MAX_HOPS) return 'limit';
       job.hops += 1;
-      await setJobs(jobs);
+      return { ...job };
+    }).then(async job => {
+      if (job === 'limit') { await finishJob(tabId, 'not-found'); return sendResponse(false); }
+      if (!job) return sendResponse(false);
       notifyUi(job, 'working', { step: msg.step || 'opening page' });
       chrome.tabs.update(tabId, { url: msg.url });
       sendResponse(true);
@@ -201,45 +317,47 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  // a search page found several articles: read them one after another in the same tab
+  // a search page found several articles: read them all at once, each in its own background tab
   if (msg.type === 'research:queue') {
-    getJobs().then(async jobs => {
+    const urls = [...new Set(msg.urls || [])].slice(0, MAX_ARTICLES);
+    withJobs(jobs => {
       const job = jobs[tabId];
-      if (!job) return;
-      job.queue = (msg.urls || []).slice(0, MAX_ARTICLES);
-      job.reading = true;                      // pages from here on are articles, never list pages
+      if (!job || job.child) return null;
       job.acc = job.acc || emptyPayload(job);
-      const next = job.queue.shift();
-      await setJobs(jobs);
-      if (!next) return finishJob(tabId, 'not-found');
-      notifyUi(job, 'working', { step: `reading article 1 of ${job.queue.length + 1}` });
-      chrome.tabs.update(tabId, { url: next });
+      job.pending = urls.length;
+      job.total = urls.length;
+      job.read = 0;
+      return { ...job };
+    }).then(job => {
+      if (!job) return;
+      if (!urls.length) return finishJob(tabId, 'not-found');
+      notifyUi(job, 'working', { step: `reading ${urls.length} ${job.site === 'Reddit' ? 'threads' : 'articles'}` });
+      queueArticles(tabId, urls);
     });
     return false;
   }
 
-  // one article read: keep it, move to the next or finish
+  // an article read (in its own tab), or a site's page that is itself the article
   if (msg.type === 'research:partial') {
-    getJobs().then(async jobs => {
+    getJobs().then(jobs => {
       const job = jobs[tabId];
       if (!job) return;
-      job.acc = job.acc || emptyPayload(job);
-      mergeInto(job.acc, msg.payload || {});
-      job.read += 1;
-      const next = job.queue.shift();
-      await setJobs(jobs);
-      if (next) {
-        notifyUi(job, 'working', { step: `reading article ${job.read + 1} of ${job.read + 1 + job.queue.length}` });
-        chrome.tabs.update(tabId, { url: next });
-      } else {
-        finishJob(tabId, hasContent(job.acc) ? 'done' : 'empty', { payload: job.acc });
-      }
+      if (job.child) return articleDone(tabId, msg.payload || null);
+      const payload = { ...emptyPayload(job), ...(msg.payload || {}) };
+      finishJob(tabId, hasContent(payload) ? 'done' : 'empty', { payload });
     });
     return false;
   }
 
   if (msg.type === 'research:result') {       // payload travels to the Prepify tab with the status
-    finishJob(tabId, msg.status, { url: msg.url, payload: msg.payload, detail: msg.detail, outline: msg.outline });
+    getJobs().then(jobs => {
+      const job = jobs[tabId];
+      if (job && job.child) {                   // an article hit a wall or had nothing: the others still count
+        const wall = msg.status === 'login' || msg.status === 'blocked' ? msg.status : null;
+        return articleDone(tabId, msg.status === 'done' ? msg.payload : null, null, wall);
+      }
+      finishJob(tabId, msg.status, { url: msg.url, payload: msg.payload, detail: msg.detail, outline: msg.outline });
+    });
     return false;
   }
 });
@@ -253,13 +371,21 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
     await setLoginTabs(logins);
     chrome.tabs.sendMessage(info.uiTabId, { type: 'research:update', site: info.site, company: info.company, status: 'login-closed' }).catch(() => {});
   }
-  const jobs = await getJobs();
-  if (jobs[tabId]) {
-    const job = jobs[tabId];
+  const job = (await getJobs())[tabId];
+  if (!job) return;
+  if (job.child) return articleDone(tabId, null);     // an article tab closed: the rest of the site carries on
+  const r = await withJobs(jobs => {
+    const j = jobs[tabId];
+    if (!j) return null;
     delete jobs[tabId];
-    await setJobs(jobs);
-    notifyUi(job, hasContent(job.acc) ? 'done' : 'cancelled', hasContent(job.acc) ? { payload: job.acc } : {});
-  }
+    const children = Object.keys(jobs).filter(id => String(jobs[id].parent) === String(tabId));
+    children.forEach(id => delete jobs[id]);
+    return { j, children };
+  });
+  if (!r) return;
+  unlighten(tabId);
+  r.children.forEach(id => { unlighten(id); chrome.tabs.remove(Number(id)).catch(() => {}); });
+  notifyUi(r.j, hasContent(r.j.acc) ? 'done' : 'cancelled', hasContent(r.j.acc) ? { payload: r.j.acc } : {});
 });
 
 // ---------- right-click: save selected text as a question ----------
