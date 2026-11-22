@@ -61,3 +61,40 @@ def test_locate_endpoint_needs_sign_in():
     body = c.get('/api/sources/locate?site=Code360&company=TCS').get_json()
     assert body['covered'] and body['match'] == ['tata', 'consultancy']
     assert c.get('/api/sources/locate?site=Glassdoor&company=TCS').status_code == 400
+
+
+# ---------- public deployment: the server never fetches private or internal addresses ----------
+@pytest.mark.parametrize('url', ['http://127.0.0.1:5000/', 'http://localhost/', 'http://169.254.169.254/latest/meta-data/',
+                                 'http://10.0.0.5/', 'http://192.168.1.1/', 'http://[::1]/', 'file:///etc/passwd',
+                                 'http://example.com:8080/', 'http://user:pw@example.com/'])
+def test_official_links_must_be_public(url):
+    with pytest.raises(prepify.UnsafeURL):
+        prepify._check_public(url)
+
+
+def test_a_redirect_into_the_private_network_is_refused(monkeypatch):
+    import requests
+
+    class R:
+        is_redirect = True
+        headers = {'location': 'http://169.254.169.254/latest/meta-data/'}
+    monkeypatch.setattr(prepify, '_check_public', lambda u: (_ for _ in ()).throw(prepify.UnsafeURL('private')) if '169.254' in u else None)
+    monkeypatch.setattr(requests, 'get', lambda *a, **k: R())
+    with pytest.raises(prepify.UnsafeURL):
+        prepify._public_get('https://careers.example.com/', timeout=5)
+
+
+def test_pasted_private_link_is_refused_with_a_reason():
+    c = prepify.app.test_client()
+    with c.session_transaction() as s:
+        s['user'] = {'name': 't', 'email': 't@example.com'}
+    r = c.get('/api/sources/official', query_string={'company': 'X', 'url': 'http://127.0.0.1:5000/api/auth/config'})
+    assert r.status_code == 400 and r.get_json()['reason'] == 'unsafe'
+
+
+def test_free_endpoints_are_rate_limited():
+    prepify._hits.clear()
+    c = prepify.app.test_client()
+    codes = [c.get('/api/parse?q=TCS').status_code for _ in range(125)]
+    assert codes[0] == 200 and codes[-1] == 429
+    prepify._hits.clear()

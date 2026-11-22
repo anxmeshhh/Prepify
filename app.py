@@ -35,14 +35,47 @@ from query_parser import parse_query  # noqa: E402
 app = Flask(__name__, static_folder=os.path.join(BUNDLE_DIR, 'static'),
             template_folder=os.path.join(BUNDLE_DIR, 'templates'))
 
+# Deployed (PREPIFY_PUBLIC_URL=https://...): the host's proxy terminates HTTPS, so trust its forwarded
+# headers for the client address and scheme, and send the session cookie over HTTPS only.
+PUBLIC_URL = (os.environ.get('PREPIFY_PUBLIC_URL') or os.environ.get('RENDER_EXTERNAL_URL') or '').strip().rstrip('/')
+if PUBLIC_URL:
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
 # Sessions are signed cookies, not server storage. Without PREPIFY_SECRET a fresh key is made
 # on every start, which simply signs everyone out after a restart.
 app.secret_key = os.environ.get('PREPIFY_SECRET') or secrets.token_hex(32)
+if PUBLIC_URL and not os.environ.get('PREPIFY_SECRET'):
+    print('WARNING: PREPIFY_SECRET is not set; everyone is signed out whenever the server restarts.', file=sys.stderr)
 app.config.update(
     MAX_CONTENT_LENGTH=12 * 1024 * 1024,   # a JD and a resume upload
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=PUBLIC_URL.startswith('https://'),
 )
+
+
+# ---------- a simple per-visitor limit on the endpoints anyone can call without signing in ----------
+_hits = {}
+
+
+def _limited(bucket, per, seconds):
+    """True when this client address has made more than `per` calls to `bucket` in `seconds`."""
+    import time
+    now = time.time()
+    key = (bucket, request.remote_addr or '?')
+    recent = [t for t in _hits.get(key, []) if now - t < seconds]
+    recent.append(now)
+    _hits[key] = recent
+    if len(_hits) > 20000:                     # forget idle visitors
+        for k in [k for k, v in _hits.items() if now - v[-1] > 3600]:
+            _hits.pop(k, None)
+    return len(recent) > per
+
+
+@app.route('/healthz')
+def healthz():
+    return jsonify({'ok': True})
 
 # Prepify's own Google sign-in client. A client ID is public (it's sent to every browser), so it's built in:
 # people who run Prepify can sign in without setting anything up. GOOGLE_CLIENT_ID in .env overrides it.
@@ -60,6 +93,8 @@ def parse():
     q = (request.args.get('q') or '').strip()
     if not q:
         return jsonify({'error': 'empty query'}), 400
+    if _limited('parse', 120, 60):
+        return jsonify({'error': 'Too many searches at once. Wait a minute and try again.'}), 429
     known = [k for k in request.args.getlist('known') if k][:200]
     return jsonify({'query': q, 'parsed': parse_query(q, known)})
 
@@ -70,6 +105,8 @@ def analyse_jd():
     With use_ai=1 (signed in, AI set up) the AI reads it; the rules are the fallback.
     Nothing is kept: the text is read, analysed and the result is returned."""
     user = current_user()
+    if _limited('jd', 20, 600):
+        return jsonify({'error': 'Too many job descriptions in a short time. Wait a few minutes and try again.'}), 429
     use_ai = request.form.get('use_ai') == '1' and bool(user) and ai.available()
     jd_file = request.files.get('jd_file')
     text = None
@@ -397,14 +434,53 @@ OFFICIAL_SECTION_WORDS = re.compile(r'\b(eligib\w*|selection|hiring process|recr
                                     r'freshers?|what to expect|prepar\w*)\b', re.I)
 
 
+class UnsafeURL(ValueError):
+    pass
+
+
+def _check_public(url):
+    """Only http(s) on the normal ports, to hosts whose every address is public: a pasted careers link must
+    never make the server reach its own machine, the private network or the cloud's metadata service."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlsplit
+    parts = urlsplit(url)
+    if parts.scheme not in ('http', 'https') or not parts.hostname or parts.username or parts.password:
+        raise UnsafeURL('only public http(s) addresses')
+    if parts.port not in (None, 80, 443):
+        raise UnsafeURL('only the standard web ports')
+    try:
+        infos = socket.getaddrinfo(parts.hostname, parts.port or (443 if parts.scheme == 'https' else 80))
+    except socket.gaierror:
+        raise UnsafeURL("that address doesn't exist")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0].split('%')[0])
+        if not ip.is_global or ip.is_multicast:
+            raise UnsafeURL('that address is not on the public internet')
+
+
+def _public_get(url, timeout, max_redirects=4):
+    """requests.get that checks every hop of a redirect chain with _check_public."""
+    import requests
+    from urllib.parse import urljoin
+    headers = {'User-Agent': OFFICIAL_UA, 'Accept-Language': 'en-IN,en;q=0.8'}
+    for _ in range(max_redirects + 1):
+        _check_public(url)
+        r = requests.get(url, headers=headers, timeout=timeout, allow_redirects=False)
+        if r.is_redirect and r.headers.get('location'):
+            url = urljoin(url, r.headers['location'])
+            continue
+        return r
+    raise UnsafeURL('too many redirects')
+
+
 def _allowed_by_robots(url):
     from urllib import robotparser
     from urllib.parse import urlsplit
-    import requests
     parts = urlsplit(url)
     rp = robotparser.RobotFileParser()
     try:
-        r = requests.get(f'{parts.scheme}://{parts.netloc}/robots.txt', headers={'User-Agent': OFFICIAL_UA}, timeout=10)
+        r = _public_get(f'{parts.scheme}://{parts.netloc}/robots.txt', timeout=10)
         if r.status_code >= 400:
             return True                      # no robots.txt: allowed
         rp.parse(r.text.splitlines())
@@ -415,10 +491,9 @@ def _allowed_by_robots(url):
 
 def _read_official_page(url):
     """Title, relevant sections (heading + paragraphs/list items) and promising same-site links."""
-    import requests
     from bs4 import BeautifulSoup
     from urllib.parse import urljoin, urlsplit
-    r = requests.get(url, headers={'User-Agent': OFFICIAL_UA, 'Accept-Language': 'en-IN,en;q=0.8'}, timeout=15)
+    r = _public_get(url, timeout=15)
     r.raise_for_status()
     if 'html' not in r.headers.get('content-type', ''):
         return None
@@ -466,6 +541,10 @@ def official_source():
     for u in starts:
         if urlsplit(u).scheme not in ('http', 'https') or not urlsplit(u).netloc:
             return jsonify({'error': 'that is not a web address'}), 400
+        try:
+            _check_public(u)
+        except UnsafeURL as e:
+            return jsonify({'error': f"Prepify can't read that link: {e}.", 'needs_url': True, 'reason': 'unsafe'}), 400
 
     pages, seen, queue = [], set(), list(starts)
     blocked = fetched = 0

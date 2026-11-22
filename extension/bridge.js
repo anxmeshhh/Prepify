@@ -20,7 +20,8 @@
   window.addEventListener('message', (e) => {
     if (e.source !== window || !e.data || e.data.source !== 'prepify-page') return;
     if (e.data.type === 'research:start') {
-      toExtension({ type: 'research:start', company: e.data.company, sites: e.data.sites });
+      toExtension({ type: 'research:start', company: e.data.company, sites: e.data.sites,
+                    urls: e.data.urls || {}, match: e.data.match || {} });
     } else if (e.data.type === 'login:open') {
       toExtension({ type: 'login:open', company: e.data.company, site: e.data.site });
     }
