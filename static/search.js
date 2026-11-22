@@ -763,6 +763,43 @@ function showHome() {
   $('#results').classList.add('hidden');
   document.title = 'Prepify';
   $('#home-q').focus();
+  typeExamples();
+}
+
+// The empty home search box types example searches into its placeholder, slowly, to show what works.
+// It stops for good once the person types, and never runs for people who ask for less motion.
+const HOME_HINT = 'Search a company, role or round…';
+const HOME_EXAMPLES = ['TCS Ninja HR questions', 'Amazon SDE 2 system design round', 'Accenture ASE interview process',
+                       'Infosys SP coding questions', 'Target data analyst interview'];
+let typing = null;
+function typeExamples() {
+  const box = $('#home-q');
+  if (!box || typing || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const stop = () => { clearTimeout(typing && typing.t); typing = { stopped: true }; box.placeholder = HOME_HINT; };
+  box.addEventListener('input', stop, { once: true });
+  let n = 0;
+  const wait = (ms, fn) => { if (!typing.stopped) typing.t = setTimeout(fn, ms); };
+  const type = (text, i, then) => {
+    if (typing.stopped || box.value) return;
+    box.placeholder = text.slice(0, i);
+    if (i < text.length) wait(55 + Math.random() * 45, () => type(text, i + 1, then));
+    else wait(2200, then);
+  };
+  const erase = (text, i, then) => {
+    if (typing.stopped || box.value) return;
+    box.placeholder = text.slice(0, i);
+    if (i > 0) wait(22, () => erase(text, i - 1, then));
+    else wait(350, then);
+  };
+  const next = () => {
+    if ($('#home').classList.contains('hidden')) { typing = null; box.placeholder = HOME_HINT; return; }
+    const text = HOME_EXAMPLES[n++ % HOME_EXAMPLES.length];
+    type(text, 0, () => erase(text, text.length, () => {
+      if (n % HOME_EXAMPLES.length === 0) { box.placeholder = HOME_HINT; wait(4000, next); } else next();
+    }));
+  };
+  typing = { stopped: false };
+  wait(3000, next);                       // first the plain hint, then the examples
 }
 
 const urlFor = (q, src, tab) => '/?q=' + encodeURIComponent(q) + (src ? '&src=' + encodeURIComponent(src) : '') + (src && tab ? '&tab=' + encodeURIComponent(tab) : '');

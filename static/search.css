@@ -1319,3 +1319,55 @@ a.btn:hover { text-decoration: none; }
 @media (max-width: 720px) {
   .qa-actions, .qa-card .ai-answer { margin-left: 0; }
 }
+
+/* =================================================================================================
+   Home page motion: calm and brief. One entrance, a terminal cursor, example searches typed into the
+   empty box, a slow glow behind the wordmark, and small hover feedback. All of it switches off for people
+   who ask their system for less motion.
+   ================================================================================================= */
+.home { position: relative; isolation: isolate; overflow: hidden; }
+.home::before, .home::after { content: ''; position: absolute; pointer-events: none; z-index: -1; }
+/* a barely visible dot grid that fades out towards the edges */
+.home::before {
+  inset: 0;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+  background-size: 26px 26px;
+  -webkit-mask-image: radial-gradient(ellipse 60% 55% at 50% 34%, #000 30%, transparent 75%);
+          mask-image: radial-gradient(ellipse 60% 55% at 50% 34%, #000 30%, transparent 75%);
+}
+/* a soft accent glow behind the wordmark, breathing slowly */
+.home::after {
+  left: 50%; top: 16vh; width: min(760px, 120vw); height: 420px; transform: translate(-50%, -30%);
+  background: radial-gradient(closest-side, rgba(250, 178, 131, 0.09), transparent);
+  animation: home-glow 9s ease-in-out infinite alternate;
+}
+@keyframes home-glow { from { opacity: .55; transform: translate(-50%, -30%) scale(.94); } to { opacity: 1; transform: translate(-50%, -30%) scale(1.04); } }
+
+/* the entrance: each part rises into place once, one after another */
+.home-inner > * { animation: home-rise .55s cubic-bezier(.2, .7, .2, 1) both; }
+.home-inner > :nth-child(1) { animation-delay: .02s; }
+.home-inner > :nth-child(2) { animation-delay: .09s; }
+.home-inner > :nth-child(3) { animation-delay: .16s; }
+.home-inner > :nth-child(4) { animation-delay: .23s; }
+.home-inner > :nth-child(5) { animation-delay: .30s; }
+.home-inner > :nth-child(6) { animation-delay: .37s; }
+@keyframes home-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+/* a terminal cursor after the wordmark */
+.home .wordmark::after {
+  content: ''; display: inline-block; width: .26em; height: .56em; margin-left: .12em; vertical-align: .02em;
+  background: var(--accent); opacity: .9; border-radius: 2px; animation: home-cursor 1.15s steps(1, end) infinite;
+}
+@keyframes home-cursor { 0%, 55% { opacity: .9; } 56%, 100% { opacity: 0; } }
+
+/* small, quick feedback */
+.searchbar { transition: border-color .2s ease, box-shadow .25s ease; }
+.home .btn, .example { transition: transform .15s ease, border-color .15s ease, color .15s ease, filter .15s ease; }
+.home .btn:hover, .example:hover { transform: translateY(-1px); }
+.home .btn:active, .example:active { transform: translateY(0); }
+
+@media (prefers-reduced-motion: reduce) {
+  .home::after, .home .wordmark::after { animation: none; }
+  .home-inner > * { animation: none; }
+  .home .btn:hover, .example:hover { transform: none; }
+}
