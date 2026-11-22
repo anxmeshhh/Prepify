@@ -1,0 +1,49 @@
+PREPIFY: interview experiences, questions and answers for any company
+=====================================================================
+
+WHAT'S IN THIS FOLDER
+  Prepify.exe             the app: double-click to start it
+  extension\              the Prepify Capture extension for Chrome (pulls sources into Prepify)
+  prepify-settings.txt    where your own Groq API key goes (for the AI features)
+  HOW-TO-USE.txt          this file
+
+You don't need Python, VS Code or anything else installed.
+
+1. START PREPIFY
+   a. Copy this whole folder somewhere you keep it (for example, your Desktop or Documents).
+   b. Double-click Prepify.exe.
+      - If Windows shows "Windows protected your PC", click "More info", then "Run anyway".
+        (The app isn't code-signed, so Windows warns about it.)
+   c. A black window opens and Prepify opens in your browser at http://localhost:5000.
+      Keep the black window open while you use Prepify. Close it to stop Prepify.
+   d. The first time, Prepify asks your name and Gmail, then your Groq API key (step 3).
+
+2. ADD THE EXTENSION TO CHROME (one time)
+   a. Open Chrome and go to:  chrome://extensions
+   b. Turn on "Developer mode" (switch at the top right).
+   c. Click "Load unpacked" and choose the "extension" folder inside this folder.
+   d. "Prepify Capture" appears in the list. Reload the Prepify tab.
+   Keep this folder where it is: Chrome loads the extension from it.
+
+3. ADD YOUR GROQ API KEY (for the AI features; free)
+   a. Create a key at https://console.groq.com/keys (sign in, "Create API key", copy it).
+   b. Either paste it in the box Prepify shows when it starts (it's saved for you), or
+      open prepify-settings.txt with Notepad and paste it after  GROQ_API_KEY=
+      then save the file and start Prepify.exe again.
+   Without a key everything except the AI features still works.
+
+4. USE IT
+   Search a company and role, for example "Accenture data analyst interview questions".
+   Sign in (top right) and click "Pull all sources": the extension reads the sites in your
+   own Chrome. If a site needs you to sign in or verify, Prepify tells you.
+
+PRIVACY
+Everything you pull stays in your browser tab and is erased when you close the tab or sign out.
+Your Groq key stays in prepify-settings.txt on your computer. Your name and Gmail from the
+welcome screen go to the Prepify team (gang F-205). Prepify never sees your passwords.
+
+PROBLEMS
+- "Port 5000 is being used by another program": close that program and start Prepify again.
+- Using a VPN? Turn it off if Google sign-in or a site refuses to load.
+- Google sign-in says access is blocked: ask the person who shared Prepify to add your Google
+  account as a test user.

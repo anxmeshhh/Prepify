@@ -24,3 +24,7 @@ dist/
 .prepify-profile.json
 *.json.tmp
 .env.tmp
+
+# desktop_app/ is shared as-is: never a user's own files from running it there
+desktop_app/.env
+desktop_app/.prepify-*

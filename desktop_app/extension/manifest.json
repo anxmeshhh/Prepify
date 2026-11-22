@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Prepify Capture",
+  "version": "0.8.1",
+  "description": "Pulls interview experiences, questions, answers and discussions from the pages you ask for into your Prepify tab. Nothing is stored on a server.",
+  "permissions": ["contextMenus", "storage"],
+  "host_permissions": [
+    "http://localhost:5000/*",
+    "http://127.0.0.1:5000/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.glassdoor.com/*",
+        "*://*.glassdoor.co.in/*",
+        "*://*.ambitionbox.com/*",
+        "*://*.indeed.com/*",
+        "*://*.geeksforgeeks.org/*",
+        "*://old.reddit.com/*",
+        "*://leetcode.com/*",
+        "*://prepinsta.com/*",
+        "*://*.prepinsta.com/*",
+        "*://www.naukri.com/code360/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "http://localhost:5000/*",
+        "http://127.0.0.1:5000/*"
+      ],
+      "js": ["bridge.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

@@ -21,6 +21,9 @@ HOME_DIR = os.path.dirname(sys.executable) if FROZEN else os.path.dirname(os.pat
 
 try:  # settings from .env (GOOGLE_CLIENT_ID, PREPIFY_SECRET, GROQ_API_KEY); real environment variables win
     from dotenv import load_dotenv
+    # the shared app keeps the user's settings (their Groq key) in prepify-settings.txt next to Prepify.exe;
+    # a developer copy uses .env. The first file that sets a value wins.
+    load_dotenv(os.path.join(HOME_DIR, 'prepify-settings.txt'))
     load_dotenv(os.path.join(HOME_DIR, '.env'))
 except ImportError:
     pass
@@ -82,7 +85,9 @@ def healthz():
 import setup_local  # noqa: E402
 
 PROFILE_FILE = os.path.join(HOME_DIR, '.prepify-profile.json')
-ENV_FILE = os.path.join(HOME_DIR, '.env')
+SETTINGS_FILE = os.path.join(HOME_DIR, 'prepify-settings.txt')
+# where a pasted Groq key is saved: prepify-settings.txt in the shared app, .env in a developer copy
+ENV_FILE = SETTINGS_FILE if (FROZEN or os.path.exists(SETTINGS_FILE)) else os.path.join(HOME_DIR, '.env')
 if not PUBLIC_URL:
     setup_local.sync_in_background(PROFILE_FILE)      # details saved while offline go to Supabase now
 

@@ -1,0 +1,13 @@
+# ================================================================
+#  PREPIFY SETTINGS: put your own Groq API key here
+# ================================================================
+#
+#  1. Get a free key: https://console.groq.com/keys  (sign in, click "Create API key", copy it)
+#  2. Paste it after the = sign on the GROQ_API_KEY line below, with no spaces or quotes. Example:
+#        GROQ_API_KEY=your-key-starts-with-gsk_
+#  3. Save this file, then close the black Prepify window and start Prepify.exe again.
+#
+#  You can also skip this file: Prepify asks for the key when it starts, and saves it here for you.
+#  Keep this key private. Don't share this file once your key is in it.
+
+GROQ_API_KEY=

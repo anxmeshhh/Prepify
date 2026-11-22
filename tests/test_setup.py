@@ -95,3 +95,14 @@ def test_setup_is_refused_on_a_hosted_copy(local, monkeypatch):
     assert c.post('/api/setup/profile', json={'name': 'A', 'email': 'a@gmail.com'}).status_code == 403
     assert c.post('/api/setup/groq', json={'key': 'gsk_' + 'a' * 40}).status_code == 403
     assert c.get('/api/setup').get_json()['local'] is False
+
+
+def test_shared_settings_files_carry_no_key():
+    """The settings file shipped to users (and the copy in desktop_app/) must never contain a real key."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for rel in ('packaging/prepify-settings.txt', 'desktop_app/prepify-settings.txt'):
+        p = os.path.join(root, rel)
+        if os.path.exists(p):
+            lines = [ln.strip() for ln in open(p, encoding='utf-8').read().splitlines() if not ln.lstrip().startswith('#')]
+            assert 'GROQ_API_KEY=' in lines, f'{rel}: the key line must be empty'
+            assert not any('gsk_' in ln for ln in lines), f'{rel} contains a Groq key'

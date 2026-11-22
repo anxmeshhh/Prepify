@@ -1,12 +1,13 @@
 """Build Prepify.exe for sharing (Windows): python build_exe.py
 
-Makes dist/Prepify/ with
-  Prepify.exe        the app (double-click: starts Prepify and opens http://localhost:5000)
-  extension/         the Prepify Capture Chrome extension, for pulling sources
-  HOW-TO-USE.txt     instructions for the person you share it with
+Makes desktop_app/ (the folder people copy) with
+  Prepify.exe            the app (double-click: starts Prepify and opens http://localhost:5000)
+  extension/             the Prepify Capture Chrome extension ("Load unpacked" this folder)
+  prepify-settings.txt   where each user puts their own Groq API key (empty here)
+  HOW-TO-USE.txt         instructions for the person you share it with
 and zips it to dist/Prepify-windows.zip.
 
-Your .env is NOT included: your Groq key stays with you. People who want AI assist add their own key.
+Your .env is NOT included: your Groq key stays with you. Every user adds their own key.
 Needs: pip install pyinstaller
 """
 import os
@@ -15,7 +16,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DIST = os.path.join(ROOT, 'dist')
-OUT = os.path.join(DIST, 'Prepify')
+OUT = os.path.join(ROOT, 'desktop_app')
 SEP = ';' if os.name == 'nt' else ':'
 
 
@@ -42,9 +43,10 @@ def main():
     exe = 'Prepify.exe' if os.name == 'nt' else 'Prepify'
     shutil.move(os.path.join(DIST, exe), os.path.join(OUT, exe))
     shutil.copytree(os.path.join(ROOT, 'extension'), os.path.join(OUT, 'extension'))
-    shutil.copy(os.path.join(ROOT, 'packaging', 'HOW-TO-USE.txt'), OUT)
-    archive = shutil.make_archive(os.path.join(DIST, 'Prepify-windows'), 'zip', DIST, 'Prepify')
-    print(f'\nDone: {archive}\nShare that zip. Your .env (and your Groq key) is not in it.')
+    for f in ('HOW-TO-USE.txt', 'prepify-settings.txt'):
+        shutil.copy(os.path.join(ROOT, 'packaging', f), OUT)
+    archive = shutil.make_archive(os.path.join(DIST, 'Prepify-windows'), 'zip', ROOT, 'desktop_app')
+    print(f'\nDone: {OUT}\nand {archive}\nShare either one. Your .env (and your Groq key) is not in it.')
 
 
 if __name__ == '__main__':
