@@ -44,6 +44,6 @@ welcome screen go to the Prepify team (gang F-205). Prepify never sees your pass
 
 PROBLEMS
 - "Port 5000 is being used by another program": close that program and start Prepify again.
-- Using a VPN? Turn it off if Google sign-in or a site refuses to load.
-- Google sign-in says access is blocked: ask the person who shared Prepify to add your Google
-  account as a test user.
+- Using a VPN? Turn it off if a site refuses to load.
+- Google sign-in doesn't work: open Prepify at http://localhost:5000 (the address it opens by
+  itself) and turn off any VPN.

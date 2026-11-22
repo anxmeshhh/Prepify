@@ -128,13 +128,23 @@ pip install -r requirements.txt pyinstaller
 python build_exe.py
 ```
 
-This makes `dist/Prepify-windows.zip` (about 32 MB) with `Prepify.exe`, the `extension` folder and `HOW-TO-USE.txt`. Share that zip. Your `.env` is not included, so your Groq key stays with you.
+This rebuilds the **`desktop_app/`** folder (also zipped to `dist/Prepify-windows.zip`, about 32 MB):
 
-**What the people you share it with do:** unzip it and double-click `Prepify.exe`. A console window opens (closing it stops Prepify) and their browser opens Prepify at `http://localhost:5000`. Guest mode works straight away. To pull sources they sign in with their own Google account and load the extension once (`chrome://extensions` → Developer mode → Load unpacked → `extension`). For AI assist they put their own free Groq key in a `.env` file next to `Prepify.exe`. `HOW-TO-USE.txt` walks them through all of this.
+| File | What it is |
+| --- | --- |
+| `Prepify.exe` | The app. Double-click to start; needs no Python or anything else installed |
+| `extension/` | The Prepify Capture extension: `chrome://extensions` → Developer mode → Load unpacked → this folder |
+| `prepify-settings.txt` | Where each user puts their own Groq API key (shipped empty) |
+| `HOW-TO-USE.txt` | Step-by-step guide for the person you share it with |
+
+Share the folder or the zip. Your `.env` is not included, so your Groq key stays with you; a test checks that the shipped settings file never carries a key.
+
+**What the people you share it with do:** unzip it and double-click `Prepify.exe`. A console window opens (closing it stops Prepify) and their browser opens Prepify at `http://localhost:5000`. Guest mode works straight away. To pull sources they sign in with their own Google account and load the extension once (`chrome://extensions` → Developer mode → Load unpacked → `extension`). On first start Prepify shows a welcome from gang F-205 that asks their name and Gmail (sent once to the team's Supabase list), then asks for their own free Groq key, checks it and saves it in `prepify-settings.txt`. They can also paste it into that file themselves. `HOW-TO-USE.txt` walks them through all of this.
 
 **Things to know:**
 
-- **Google sign-in for other people:** while the Google Cloud OAuth consent screen is in *Testing*, only accounts you add under *Test users* (up to 100) can sign in. To let anyone sign in, publish the app on the consent screen page. Prepify asks only for the basic sign-in scopes (name, email), which don't need Google's full app review; Google may still ask to verify the app's name and logo before showing them.
+- **Google sign-in for other people:** the OAuth consent screen is published (*In production*, *External*), so anyone with a Google account can sign in. Prepify asks only for the basic sign-in scopes (name, email), which don't need Google's app review. Every copy runs at `http://localhost:5000`, the origin registered for the client.
+- **User list (Supabase):** run `supabase/prepify_users.sql` once in the Supabase SQL editor, then put the project URL and the anon / publishable key in `setup_local.py` (`DEFAULT_SUPABASE_URL`, `DEFAULT_SUPABASE_KEY`) before building, or in `.env` as `SUPABASE_URL` / `SUPABASE_KEY` for a developer copy. The table only accepts new rows from that key; you read the list in the Supabase dashboard.
 - **Port 5000 is fixed.** Google sign-in (`http://localhost:5000` is the authorised JavaScript origin) and the extension are both set up for it. If another program holds the port, Prepify says so. If Prepify is already running, starting it again just opens the browser.
 - **Don't build your Groq key into the app.** Anything inside the `.exe` can be extracted and your allowance used by others. Each person adds their own key.
 - **Windows SmartScreen** warns about unsigned apps ("More info" → "Run anyway"). Code-signing the `.exe` removes the warning.
@@ -152,7 +162,9 @@ This makes `dist/Prepify-windows.zip` (about 32 MB) with `Prepify.exe`, the `ext
 | `tests/` | `python -m pytest tests` |
 | `templates/search.html`, `static/search.*`, `static/jd.js`, `static/ai.js` | Search home page, results pages, JD page, AI assist and in-tab session store |
 | `extension/` | Prepify Capture Chrome extension (Manifest V3) |
-| `build_exe.py`, `packaging/` | Builds the shareable Windows app (`dist/Prepify-windows.zip`) and its user guide |
+| `build_exe.py`, `packaging/` | Builds the shareable Windows app into `desktop_app/` (and `dist/Prepify-windows.zip`), with its user guide and settings file |
+| `desktop_app/` | The ready-to-share folder: `Prepify.exe`, `extension/`, `prepify-settings.txt`, `HOW-TO-USE.txt` |
+| `setup_local.py`, `static/setup.js`, `supabase/` | First run: the welcome (name and Gmail to Supabase) and the user's own Groq key |
 
 ## Data sources and terms
 
